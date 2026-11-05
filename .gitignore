@@ -33,3 +33,7 @@ iSyncProbe-out/
 # Device pair records contain private keys
 *.pairrecord
 *.plist.pair
+
+# Generated from project.yml by XcodeGen
+*.xcodeproj/
+iSyncApp/build/
