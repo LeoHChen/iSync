@@ -91,12 +91,15 @@ public enum SyncPlanner {
         preview.skippedUnsafe = files.count - safe.count
         for f in safe { preview.total.add(f) }
 
-        // Files the manifest says are done.
+        // Files the manifest says are done, and where this phone's own copies are.
+        let root = canonicalPath(destination) + "/"
         var current = Set<String>()
+        var ownCopies = Set<String>()
         for f in safe {
             guard let e = manifest.entries[f.path], e.size == f.size, e.modifiedNs == f.modifiedNs else { continue }
             if let local = CopyPlanner.localFile(destination.appendingPathComponent(e.localPath)), local.size == f.size {
                 current.insert(f.path)
+                ownCopies.insert(root + e.localPath)
             }
         }
 
@@ -124,7 +127,7 @@ public enum SyncPlanner {
 
         for group in groups {
             let dir = CopyPlanner.directory(for: group, layout: options.layout, calendar: calendar)
-            for file in group.files where !current.contains(file.path) {
+            for file in group.files where !current.contains(file.path) && PhotoGroup.isMedia(file.path) {
                 let print = fingerprints[file.path] ?? MediaFingerprint(size: file.size)
                 let sourceHash = manifest.sourceHash(for: file)
 
@@ -135,7 +138,10 @@ public enum SyncPlanner {
                 }
 
                 // A match may be another file's finished copy: that's still the same photo.
-                let candidates = (bySize[file.size] ?? []).filter { print.couldBeSameContent(as: $0.0.fingerprint) }
+                // A video and a still can share a size, but never the same bytes.
+                let isVideo = PhotoGroup.isVideo(file.path)
+                let candidates = (bySize[file.size] ?? [])
+                    .filter { print.couldBeSameContent(as: $0.0.fingerprint) && PhotoGroup.isVideo($0.0.path) == isVideo }
                     .sorted { $0.1 && !$1.1 }
                 search: for (item, isDestination) in candidates {
                     let target: DuplicateTarget = isDestination ? .destination(item) : .reference(item)
@@ -166,7 +172,9 @@ public enum SyncPlanner {
                     } else {
                         seenInRun[runKey] = file
                     }
-                    if let similar = byVisual[key]?.first {
+                    // Another photo from this same phone isn't a copy of this one, even if it
+                    // has the same time and size, as burst shots do.
+                    if let similar = byVisual[key]?.first(where: { !ownCopies.contains($0.path) }) {
                         possibles[file.path] = similar.path
                     }
                 }
@@ -175,49 +183,55 @@ public enum SyncPlanner {
 
         // A pair stays together: if one half would be copied, a half that matched somewhere
         // outside the destination is copied too. A match inside the destination acts as an
-        // anchor instead, so the other half lands beside it.
+        // anchor instead, so the other half lands beside it. Only photos and videos decide this.
+        var skippedWithGroup = Set<String>()
         for group in groups {
-            let wouldCopy = group.files.contains {
-                !current.contains($0.path) && duplicates[$0.path] == nil
+            let media = group.files.filter { PhotoGroup.isMedia($0.path) }
+            let wouldCopy = media.contains { !current.contains($0.path) && duplicates[$0.path] == nil }
+            if wouldCopy {
+                for file in media {
+                    switch duplicates[file.path] {
+                    case .confirmed(.reference), .unconfirmed(.reference), .confirmed(.sameRun), .unconfirmed(.sameRun):
+                        duplicates[file.path] = nil
+                    default: break
+                    }
+                }
+                continue
             }
-            guard wouldCopy else { continue }
-            for file in group.files {
+            // If the group's photos are all staying out, their sidecars stay out with them.
+            let keptOut = !media.isEmpty && media.allSatisfy { file in
                 switch duplicates[file.path] {
-                case .confirmed(.reference), .unconfirmed(.reference), .confirmed(.sameRun), .unconfirmed(.sameRun):
-                    duplicates[file.path] = nil
-                default: break
+                case .confirmed(.reference), .unconfirmed(.reference), .confirmed(.sameRun), .unconfirmed(.sameRun): return true
+                default: return false
+                }
+            }
+            if keptOut {
+                for file in group.files where !PhotoGroup.isMedia(file.path) && !current.contains(file.path) {
+                    skippedWithGroup.insert(file.path)
                 }
             }
         }
 
-        // Matches inside the destination count as done for planning, so nothing recopies them.
+        // A confirmed match inside the destination counts as done, and its group gathers beside
+        // it. An unconfirmed match decides nothing: it's only held back until SHA-256 settles it.
         var effective = manifest
         var neverRecopy = Set<String>()
         var confirmedInDestination: [PlannedFile] = []
         for file in safe {
-            let target: DuplicateTarget
-            let isConfirmed: Bool
-            switch duplicates[file.path] {
-            case .confirmed(let t): (target, isConfirmed) = (t, true)
-            case .unconfirmed(let t): (target, isConfirmed) = (t, false)
-            case nil: continue
-            }
-            guard case .destination(let item) = target, item.path.hasPrefix(destinationRoot) else { continue }
+            guard case .confirmed(.destination(let item)) = duplicates[file.path], item.path.hasPrefix(destinationRoot) else { continue }
             let rel = String(item.path.dropFirst(destinationRoot.count))
             effective.record(file, localPath: rel)
             neverRecopy.insert(file.path)
-            if isConfirmed { confirmedInDestination.append(PlannedFile(remote: file, localPath: rel)) }
+            confirmedInDestination.append(PlannedFile(remote: file, localPath: rel))
         }
 
-        // Everything that isn't skipped goes to the planner, which handles names and conflicts.
+        // Everything else that isn't skipped goes to the planner, which handles names and conflicts.
         let skipped = Set(duplicates.compactMap { path, d -> String? in
-            switch d {
-            case .confirmed(.destination), .unconfirmed(.destination): return nil
-            default: return path
-            }
+            if case .confirmed(.destination) = d { return nil }
+            return path
         })
         let held = options.copyPossibleDuplicates ? Set<String>() : Set(possibles.keys)
-        let toPlan = safe.filter { !skipped.contains($0.path) && !held.contains($0.path) }
+        let toPlan = safe.filter { !skipped.contains($0.path) && !held.contains($0.path) && !skippedWithGroup.contains($0.path) }
         preview.plan = CopyPlanner.plan(
             files: toPlan, destination: destination, manifest: effective, layout: options.layout,
             policy: options.policy, neverRecopy: neverRecopy, calendar: calendar)
@@ -233,7 +247,7 @@ public enum SyncPlanner {
             .union(planned.filter { $0.replaces && !$0.nameConflict }.map(\.remote.path))
         for file in safe {
             let category: SyncCategory
-            if duplicates[file.path] != nil {
+            if duplicates[file.path] != nil || skippedWithGroup.contains(file.path) {
                 category = .exactDuplicate
             } else if current.contains(file.path) || adopted.contains(file.path) {
                 category = .alreadyCopied

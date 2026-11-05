@@ -181,19 +181,32 @@ case "sync":
         let destIndex = FolderIndex(folder: dest)
         let refIndex = option("--reference").map { FolderIndex(folder: URL(fileURLWithPath: $0)) }
         let t1 = Date()
-        destIndex.refresh()
+        let startingManifest = CopyManifest.load(destination: dest, deviceKey: key)
+        destIndex.refresh(known: startingManifest.knownFingerprints(destination: dest, fingerprints: prints))
         refIndex?.refresh()
         say(String(format: "indexed %d files in the destination and %d in the reference folder in %.1f s", destIndex.allFiles.count, refIndex?.allFiles.count ?? 0, Date().timeIntervalSince(t1)))
 
-        var manifest = CopyManifest.load(destination: dest, deviceKey: key)
+        var manifest = startingManifest
         let options = SyncOptions(policy: policy)
         func preview() -> SyncPreview {
             SyncPlanner.preview(
                 files: subset, fingerprints: prints, destination: dest, manifest: manifest,
                 destinationFiles: destIndex.allFiles, referenceFiles: refIndex?.allFiles ?? [], options: options)
         }
+        let t3 = Date()
         var p = preview()
+        say(String(format: "planned in %.2f s", Date().timeIntervalSince(t3)))
         show(p, "preview")
+        if args.contains("--list-conflicts") {
+            for f in p.plan.toCopy.flatMap(\.files) where f.nameConflict { say("  conflict: \(f.remote.path) -> \(f.localPath), \(f.remote.size)") }
+            for c in p.unconfirmed {
+                switch c.target {
+                case .destination(let i): say("  candidate: \(c.file.path) = \(i.path.split(separator: "/").suffix(3).joined(separator: "/")), \(c.file.size)")
+                case .reference(let i): say("  candidate: \(c.file.path) = reference \(i.size)")
+                case .sameRun(let r): say("  candidate: \(c.file.path) = same run \(r.path), \(c.file.size)")
+                }
+            }
+        }
         if !args.contains("--copy") { say("dry run: nothing copied"); break }
 
         if p.needsVerification {
@@ -265,6 +278,14 @@ case "music":
         guard let destPath = option("--dest") else { break }
         let dest = URL(fileURLWithPath: destPath)
         var chosen = tracks.filter { $0.status == .copyable }
+        // --ext and --flagged are combined with "or", to check the riskiest tracks for DRM.
+        let ext = option("--ext")?.lowercased()
+        let flagged = args.contains("--flagged")
+        if ext != nil || flagged {
+            chosen = chosen.filter { t in
+                (ext != nil && ((t.remotePath ?? "") as NSString).pathExtension.lowercased() == ext) || (flagged && t.subscriptionFlag)
+            }
+        }
         if let limit = option("--limit").flatMap(Int.init) { chosen = Array(chosen.prefix(limit)) }
         func plan() -> MusicPlanner.Preview {
             MusicPlanner.plan(tracks: chosen, destination: dest, manifest: CopyManifest.load(destination: dest, deviceKey: key), policy: policy)

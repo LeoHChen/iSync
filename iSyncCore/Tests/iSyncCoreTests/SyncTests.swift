@@ -291,6 +291,122 @@ final class SyncPlannerTests: XCTestCase {
         XCTAssertEqual(p.tally(.exactDuplicate).files, 1)
     }
 
+    func testIdenticalSidecarsAreNotDuplicatesAndNothingGetsRenamed() throws {
+        // Real library: many .AAE files are byte-identical across different photos. Matching them
+        // by content would rename the photos and lose their sidecars.
+        let first = remote("/DCIM/100APPLE/IMG_1.AAE", size: 900)
+        let there = try indexed("DCIM/100APPLE/IMG_1.AAE", size: 900, print: MediaFingerprint(size: 900), at: Double(first.modifiedNs) / 1e9)
+        var m = CopyManifest(deviceKey: "k")
+        m.record(first, localPath: "DCIM/100APPLE/IMG_1.AAE")
+        let photo = remote("/DCIM/100APPLE/IMG_2.HEIC"), sidecar = remote("/DCIM/100APPLE/IMG_2.AAE", size: 900)
+        let p = preview([first, photo, sidecar], prints: [photo.path: print()], manifest: m, dest: [there])
+        XCTAssertEqual(planned(p), ["DCIM/100APPLE/IMG_2.AAE", "DCIM/100APPLE/IMG_2.HEIC"])
+        XCTAssertEqual(p.tally(.exactDuplicate).files, 0)
+        XCTAssertEqual(p.tally(.sameNameDifferent).files, 0)
+        XCTAssertEqual(p.tally(.new).files, 2)
+        XCTAssertFalse(p.needsVerification)
+    }
+
+    func testSidecarsAreNeverHashedOrHeldBack() throws {
+        let a = remote("/DCIM/100APPLE/IMG_1.AAE", size: 900), b = remote("/DCIM/101APPLE/IMG_2.AAE", size: 900)
+        let p = preview([a, b])
+        XCTAssertEqual(p.plan.toCopyFiles, 2)
+        XCTAssertFalse(p.needsVerification)
+    }
+
+    func testSidecarStaysOutWithItsPhotoWhenThePhotoIsInAnArchive() throws {
+        let archive = dest.appendingPathComponent("../\(UUID().uuidString)").standardizedFileURL
+        defer { try? FileManager.default.removeItem(at: archive) }
+        let photo = remote("/DCIM/100APPLE/IMG_1.HEIC"), sidecar = remote("/DCIM/100APPLE/IMG_1.AAE", size: 900)
+        var m = CopyManifest(deviceKey: "k")
+        m.recordSourceHash(photo, sha256: "same")
+        let there = try indexed("2019/holiday.heic", sha: "same", inFolder: archive)
+        let p = preview([photo, sidecar], prints: [photo.path: print()], manifest: m, reference: [there])
+        XCTAssertEqual(p.plan.toCopyFiles, 0)
+        XCTAssertEqual(p.tally(.exactDuplicate).files, 2)
+    }
+
+    func testSidecarLandsBesideAPhotoThatMatchedInTheDestination() throws {
+        let photo = remote("/DCIM/100APPLE/IMG_1.HEIC"), sidecar = remote("/DCIM/100APPLE/IMG_1.AAE", size: 900)
+        var m = CopyManifest(deviceKey: "k")
+        m.recordSourceHash(photo, sha256: "same")
+        let there = try indexed("2019/holiday.heic", sha: "same")
+        let p = preview([photo, sidecar], prints: [photo.path: print()], manifest: m, dest: [there])
+        XCTAssertEqual(planned(p), ["2019/holiday.AAE"])
+    }
+
+    func testBurstFrameBesideAnotherFromThisPhoneIsNotAPossibleDuplicate() throws {
+        // Same second, same dimensions, different size: two real photos, not an edited copy.
+        let copied = remote("/DCIM/100APPLE/IMG_1.HEIC", size: 100), next = remote("/DCIM/100APPLE/IMG_2.HEIC", size: 120)
+        let there = try indexed("DCIM/100APPLE/IMG_1.HEIC", size: 100, print: print(size: 100), at: Double(copied.modifiedNs) / 1e9)
+        var m = CopyManifest(deviceKey: "k")
+        m.record(copied, localPath: "DCIM/100APPLE/IMG_1.HEIC")
+        let p = preview([copied, next], prints: [copied.path: print(size: 100), next.path: print(size: 120)], manifest: m, dest: [there])
+        XCTAssertEqual(p.tally(.possibleDuplicate).files, 0)
+        XCTAssertEqual(p.tally(.new).files, 1)
+    }
+
+    func testVideoAndStillOfTheSameSizeAreNotCandidates() throws {
+        // Found in the real library: a .MOV and an unrelated .HEIC with the same byte count.
+        let video = remote("/DCIM/100APPLE/IMG_1.MOV")
+        let there = try indexed("DCIM/101APPLE/IMG_9.HEIC", print: MediaFingerprint(size: 100, capture: capture, width: 4032, height: 3024))
+        let p = preview([video], dest: [there])
+        XCTAssertFalse(p.needsVerification)
+        XCTAssertEqual(planned(p), ["DCIM/100APPLE/IMG_1.MOV"])
+    }
+
+    func testUnconfirmedMatchNeverDecidesWhereItsGroupGoes() throws {
+        // Until SHA-256 confirms it, a size match must not rename the photo next to it.
+        let still = remote("/DCIM/100APPLE/IMG_1.HEIC", size: 40), video = remote("/DCIM/100APPLE/IMG_1.MOV", size: 500)
+        let there = try indexed("DCIM/150APPLE/IMG_6234.MOV", size: 500, print: MediaFingerprint(size: 500))
+        let p = preview([still, video], prints: [still.path: print(size: 40)], dest: [there])
+        XCTAssertEqual(planned(p), ["DCIM/100APPLE/IMG_1.HEIC"])
+        XCTAssertEqual(p.unconfirmed.map(\.file), [video])
+        XCTAssertEqual(p.tally(.sameNameDifferent).files, 0)
+        XCTAssertEqual(p.plan.adopted, [])
+    }
+
+    func testRefutedMatchThenPlansTheFileNormally() throws {
+        let still = remote("/DCIM/100APPLE/IMG_1.HEIC", size: 40), video = remote("/DCIM/100APPLE/IMG_1.MOV", size: 500)
+        var m = CopyManifest(deviceKey: "k")
+        m.recordSourceHash(video, sha256: "one")
+        let there = try indexed("DCIM/150APPLE/IMG_6234.MOV", size: 500, print: MediaFingerprint(size: 500), sha: "two")
+        let p = preview([still, video], prints: [still.path: print(size: 40)], manifest: m, dest: [there])
+        XCTAssertEqual(planned(p), ["DCIM/100APPLE/IMG_1.HEIC", "DCIM/100APPLE/IMG_1.MOV"])
+        XCTAssertFalse(p.needsVerification)
+    }
+
+    func testResumingALargeCopyKeepsEveryPlannedName() throws {
+        // The shape of the real library part way through a copy: pairs, sidecars and repeated
+        // sidecar sizes. Every file must keep its own name.
+        var files: [RemoteFile] = []
+        var prints: [String: MediaFingerprint] = [:]
+        var m = CopyManifest(deviceKey: "k")
+        var index: [IndexedFile] = []
+        for i in 0..<200 {
+            let at = Int64(1_700_000_000 + i)
+            let still = remote("/DCIM/100APPLE/IMG_\(i).HEIC", size: Int64(5000 + i), at: at)
+            let video = remote("/DCIM/100APPLE/IMG_\(i).MOV", size: Int64(90000 + i), at: at)
+            let sidecar = remote("/DCIM/100APPLE/IMG_\(i).AAE", size: 900, at: at)
+            files += [still, video, sidecar]
+            prints[still.path] = MediaFingerprint(size: still.size, capture: String(20230101000000 + i), width: 10, height: 20)
+            if i < 100 {
+                for f in [still, video, sidecar] {
+                    let name = (f.path as NSString).lastPathComponent
+                    index.append(try indexed("DCIM/100APPLE/\(name)", size: f.size, print: prints[f.path] ?? MediaFingerprint(size: f.size), at: Double(at)))
+                    m.record(f, localPath: "DCIM/100APPLE/\(name)")
+                }
+            }
+        }
+        let p = preview(files, prints: prints, manifest: m, dest: index)
+        XCTAssertEqual(p.tally(.alreadyCopied).files, 300)
+        XCTAssertEqual(p.tally(.new).files, 300)
+        XCTAssertEqual(p.tally(.exactDuplicate).files, 0)
+        XCTAssertEqual(p.tally(.sameNameDifferent).files, 0)
+        XCTAssertEqual(p.plan.toCopyFiles, 300)
+        XCTAssertFalse(planned(p).contains { $0.contains(" (") })
+    }
+
     func testNoFileEverLeavesThePreviewUncounted() throws {
         let files = [remote("/DCIM/1/A.HEIC", size: 1), remote("/DCIM/1/B.HEIC", size: 2), remote("/DCIM/1/C.MOV", size: 3)]
         let p = preview(files)

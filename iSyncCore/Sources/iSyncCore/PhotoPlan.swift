@@ -7,8 +7,21 @@ public struct PhotoGroup: Hashable, Sendable {
     /// The still image comes first, then the video, then sidecars.
     public let files: [RemoteFile]
 
-    static let stills: Set<String> = ["heic", "heif", "jpg", "jpeg", "dng", "png", "tif", "tiff", "webp"]
+    static let stills: Set<String> = ["heic", "heif", "jpg", "jpeg", "dng", "png", "tif", "tiff", "webp", "gif"]
     static let liveStills: Set<String> = ["heic", "heif", "jpg", "jpeg"]
+    static let videos: Set<String> = ["mov", "mp4", "m4v"]
+
+    public static func isVideo(_ path: String) -> Bool {
+        videos.contains((path as NSString).pathExtension.lowercased())
+    }
+
+    /// True for a photo or video. Sidecars such as .AAE edit files aren't content in their own
+    /// right: many are byte-identical across different photos, so they're never matched by
+    /// content and simply follow their photo.
+    public static func isMedia(_ path: String) -> Bool {
+        let ext = (path as NSString).pathExtension.lowercased()
+        return stills.contains(ext) || videos.contains(ext)
+    }
 
     public var isLivePhoto: Bool {
         let exts = Set(files.map { ($0.path as NSString).pathExtension.lowercased() })
