@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>net.leochen.isync.probe</string>
+    <key>CFBundleName</key>
+    <string>iSyncProbe</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>NSCameraUsageDescription</key>
+    <string>iSyncProbe reads photos from your iPhone to measure transfer speed.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>iSyncProbe reads photos from your iPhone to measure transfer speed.</string>
+</dict>
+</plist>
