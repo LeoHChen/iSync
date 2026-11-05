@@ -10,7 +10,7 @@ Connecting, app file transfers and copying photos to the Mac all work on iOS 27.
 |---|---|---|
 | T1 Connect | Pass | Worked after a new Trust tap. The phone first rejected the Mac's old pair record with `InvalidHostID`. |
 | T2 Files | Pass | A 1 MB file went into an app's Documents folder and back with a matching SHA-256, then was deleted. |
-| T3 Photos to Mac | Pass | Every copy had the right size, and no run had an error. `Photos.sqlite` is readable. |
+| T3 Photos to Mac | Pass | Every AFC copy had the right size, with no errors. ImageCaptureCore also works, with the limits listed below. `Photos.sqlite` is readable. |
 | T4 Add a photo (ATC) | Not run | The preflight verdict is `unknown`, and the owner's own confirmation hasn't arrived. |
 | T5 Add a song (ATC) | Not run | Same as T4. |
 
@@ -62,7 +62,7 @@ At these speeds, the whole 191 GB library would take about 74 minutes with AFC a
 
 ### What the numbers show
 
-- **Connections:** two connections add about 18%. Four add nothing more, because the link is already full. This needs retesting on USB 3.
+- **Connections:** two connections add 11% to 18%. Four add nothing more, because the link is already full. This needs retesting on USB 3.
 - **Read size:** read size matters. 64 KB reads gave 24.2 MB/s. On samples of large videos, 1 MB reads gave 39.0 MB/s and 4 MB reads gave 40.1 MB/s.
 - **File integrity:** AFC and ImageCaptureCore produced byte-identical copies of all 818 files both methods copied (409 in each of two comparisons).
 - **Locked phone:** AFC kept working while the phone was locked. ImageCaptureCore refused to start until it was unlocked (`-9943`, "Please unlock").
@@ -81,7 +81,7 @@ At these speeds, the whole 191 GB library would take about 74 minutes with AFC a
 ### Not measured
 
 - **The Photos app's Import:** it needs the GUI, so ImageCaptureCore stands in for it. Photos does extra library processing, so its Import may be slower than this baseline.
-- **USB 3:** no USB 3 cable was available during these runs.
+- **USB 3:** every run used the cable that was plugged in, which linked at USB 2.
 
 ## T4 and T5: how far ATC got
 
