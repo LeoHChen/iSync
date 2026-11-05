@@ -3,12 +3,24 @@ import XCTest
 
 /// A pretend iPhone connection that can misbehave on request.
 final class FakeReader: RemoteFileReader {
+    func sha256(remote: String, chunk: Int, control: TransferControl, onBytes: (Int) -> Void) throws -> String {
+        let b = behaviour.with { $0 }
+        if b.missing.contains(remote) { throw AFCError(operation: "Open", code: 8, text: "not found") }
+        hashed.with { $0.append(remote) }
+        let size = b.contents[remote] ?? 0
+        onBytes(size)
+        return b.hashes[remote] ?? "size-\(size)"
+    }
+
+    let hashed = Locked<[String]>([])
+
     struct Behaviour {
         var contents: [String: Int] = [:]
         var failOnce: Set<String> = []
         var shortRead: Set<String> = []
         var missing: Set<String> = []
         var chunkDelay: TimeInterval = 0
+        var hashes: [String: String] = [:]
     }
 
     let behaviour: Locked<Behaviour>
@@ -239,6 +251,32 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(r.copiedFiles, 0)
         XCTAssertEqual(r.failures.count, 1)
         XCTAssertEqual(try Data(contentsOf: existing), Data("mine".utf8))
+    }
+
+    func testOverwriteReplacesTheExistingFile() throws {
+        let a = file("/DCIM/100APPLE/A.HEIC", size: 1024)
+        let existing = dir.appendingPathComponent("DCIM/100APPLE/A.HEIC")
+        try FileManager.default.createDirectory(at: existing.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("older, different file".utf8).write(to: existing)
+        let manifest = CopyManifest(deviceKey: "k")
+        let plan = CopyPlanner.plan(files: [a], destination: dir, manifest: manifest, layout: .sameAsIPhone, policy: .overwrite)
+        XCTAssertEqual(plan.replaceFiles, 1)
+        let make: () throws -> RemoteFileReader = { [self] in
+            FakeReader(id: 1, behaviour: behaviour, order: order)
+        }
+        let e = PhotoCopyEngine(plan: plan, destination: dir, manifest: manifest, connections: 1, chunkBytes: 256, retryDelay: 0, readerFactory: make)
+        let r = run(e)
+        XCTAssertEqual(r.copiedFiles, 1)
+        XCTAssertEqual(try Data(contentsOf: existing).count, 1024)
+        XCTAssertEqual(leftovers(), [])
+    }
+
+    func testCopiedFilesRecordTheirHash() {
+        let a = file("/DCIM/100APPLE/A.HEIC")
+        _ = run(engine([a]))
+        let m = CopyManifest.load(destination: dir, deviceKey: "k")
+        XCTAssertEqual(m.entries[a.path]?.sha256?.count, 64)
+        XCTAssertEqual(m.sourceHash(for: a)?.count, 64)
     }
 
     func testNoConnectionAtAllReportsAReason() {

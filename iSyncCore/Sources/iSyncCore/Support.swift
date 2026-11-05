@@ -50,6 +50,30 @@ public enum Format {
     }
 }
 
+public func sha256(file url: URL) throws -> String {
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    var hasher = SHA256()
+    while let chunk = try handle.read(upToCount: 4 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+}
+
+/// One spelling for a path. macOS can report the same folder as /var or /private/var, and
+/// indexes compare paths as text.
+public func canonicalPath(_ url: URL) -> String {
+    guard let resolved = realpath(url.path, nil) else { return url.path }
+    defer { free(resolved) }
+    return String(cString: resolved)
+}
+
+/// Where iSync keeps copies of phone databases and folder indexes on this Mac.
+public func iSyncCacheDirectory() -> URL {
+    let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    let url = base.appendingPathComponent("iSync")
+    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+}
+
 /// A short, stable key for a device, so its UDID isn't written into the user's folders.
 public func deviceKey(udid: String) -> String {
     SHA256.hash(data: Data(udid.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()

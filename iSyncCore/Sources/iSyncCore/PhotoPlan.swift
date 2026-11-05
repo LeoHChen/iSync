@@ -59,11 +59,22 @@ public struct CopyManifest: Codable, Equatable, Sendable {
         public var modifiedNs: Int64
         /// Relative to the destination folder.
         public var localPath: String
+        /// Missing for files copied by version 0.1.
+        public var sha256: String?
     }
 
-    public var version = 1
+    /// The hash of a file on the phone, so it's only ever read for hashing once.
+    public struct SourceHash: Codable, Equatable, Sendable {
+        public var size: Int64
+        public var modifiedNs: Int64
+        public var sha256: String
+    }
+
+    public var version = 2
     public var deviceKey: String
     public var entries: [String: Entry] = [:]
+    /// Optional so that manifests written by version 0.1 still load.
+    public var sourceHashes: [String: SourceHash]?
 
     public init(deviceKey: String) { self.deviceKey = deviceKey }
 
@@ -88,8 +99,21 @@ public struct CopyManifest: Codable, Equatable, Sendable {
         try JSONEncoder().encode(self).write(to: url, options: .atomic)
     }
 
-    public mutating func record(_ file: RemoteFile, localPath: String) {
-        entries[file.path] = Entry(size: file.size, modifiedNs: file.modifiedNs, localPath: localPath)
+    public mutating func record(_ file: RemoteFile, localPath: String, sha256: String? = nil) {
+        entries[file.path] = Entry(size: file.size, modifiedNs: file.modifiedNs, localPath: localPath, sha256: sha256)
+        if let sha256 { recordSourceHash(file, sha256: sha256) }
+    }
+
+    public mutating func recordSourceHash(_ file: RemoteFile, sha256: String) {
+        if sourceHashes == nil { sourceHashes = [:] }
+        sourceHashes?[file.path] = SourceHash(size: file.size, modifiedNs: file.modifiedNs, sha256: sha256)
+    }
+
+    /// The file's known hash, as long as it hasn't changed on the phone since.
+    public func sourceHash(for file: RemoteFile) -> String? {
+        if let h = sourceHashes?[file.path], h.size == file.size, h.modifiedNs == file.modifiedNs { return h.sha256 }
+        if let e = entries[file.path], e.size == file.size, e.modifiedNs == file.modifiedNs { return e.sha256 }
+        return nil
     }
 }
 
@@ -97,6 +121,25 @@ public struct PlannedFile: Hashable, Sendable {
     public let remote: RemoteFile
     /// Relative to the destination folder.
     public let localPath: String
+    /// True when the copy replaces a file already at `localPath`.
+    public var replaces = false
+    /// True when a different file already had this file's name.
+    public var nameConflict = false
+
+    public init(remote: RemoteFile, localPath: String, replaces: Bool = false, nameConflict: Bool = false) {
+        self.remote = remote
+        self.localPath = localPath
+        self.replaces = replaces
+        self.nameConflict = nameConflict
+    }
+}
+
+/// What to do when a file already exists at the destination.
+public enum ConflictPolicy: String, Codable, CaseIterable, Sendable {
+    /// Keep what's there. A different file with the same name gets a numbered name.
+    case skipDuplicates
+    /// Copy again and replace the file at the same path. Nothing else is ever deleted.
+    case overwrite
 }
 
 public struct PlannedGroup: Hashable, Sendable {
@@ -116,6 +159,7 @@ public struct CopyPlan: Sendable {
     /// Remote paths outside /DCIM, or with ".." in them. These are never copied.
     public var skippedUnsafe = 0
 
+    public var replaceFiles: Int { toCopy.reduce(0) { $0 + $1.files.filter(\.replaces).count } }
     public var toCopyFiles: Int { toCopy.reduce(0) { $0 + $1.files.count } }
     public var toCopyBytes: Int64 { toCopy.reduce(0) { $0 + $1.files.reduce(0) { $0 + $1.remote.size } } }
 }
@@ -126,7 +170,7 @@ public enum CopyPlanner {
         return !path.split(separator: "/").contains { $0 == ".." || $0 == "." }
     }
 
-    private static func directory(for group: PhotoGroup, layout: FolderLayout, calendar: Calendar) -> String {
+    static func directory(for group: PhotoGroup, layout: FolderLayout, calendar: Calendar) -> String {
         switch layout {
         case .sameAsIPhone:
             return String(group.folder.dropFirst())
@@ -137,7 +181,7 @@ public enum CopyPlanner {
     }
 
     /// Size and modification date of a local file, or nil if it isn't there.
-    private static func localFile(_ url: URL) -> (size: Int64, modified: Date)? {
+    static func localFile(_ url: URL) -> (size: Int64, modified: Date)? {
         guard let a = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = a[.size] as? NSNumber,
               let date = a[.modificationDate] as? Date
@@ -145,14 +189,18 @@ public enum CopyPlanner {
         return (size.int64Value, date)
     }
 
-    private static func isSame(_ local: (size: Int64, modified: Date), as remote: RemoteFile) -> Bool {
+    static func isSame(_ local: (size: Int64, modified: Date), as remote: RemoteFile) -> Bool {
         local.size == remote.size && abs(local.modified.timeIntervalSince(remote.modified)) < 2
     }
 
-    /// Decides what to copy and where. An existing file is never overwritten: a different
-    /// file with the same name gets a numbered name, and the whole group keeps that number.
+    /// Decides what to copy and where. With `.skipDuplicates`, an existing file is never
+    /// overwritten: a different file with the same name gets a numbered name, and the whole
+    /// group keeps that number. With `.overwrite`, the file at the same path is replaced.
+    /// `neverRecopy` lists files that stay put under `.overwrite`, because they're
+    /// duplicates of a file at another path.
     public static func plan(
         files: [RemoteFile], destination: URL, manifest: CopyManifest, layout: FolderLayout,
+        policy: ConflictPolicy = .skipDuplicates, neverRecopy: Set<String> = [],
         calendar: Calendar = .current
     ) -> CopyPlan {
         var plan = CopyPlan()
@@ -179,7 +227,20 @@ public enum CopyPlanner {
         // Second pass: place everything else.
         for group in groups {
             let remaining = group.files.filter { !current.contains($0.path) }
-            if remaining.isEmpty { continue }
+
+            // Overwrite copies finished files again, onto the same path.
+            var recopies: [PlannedFile] = []
+            if policy == .overwrite {
+                for file in group.files where current.contains(file.path) && !neverRecopy.contains(file.path) {
+                    if let e = manifest.entries[file.path] {
+                        recopies.append(PlannedFile(remote: file, localPath: e.localPath, replaces: true))
+                    }
+                }
+            }
+            if remaining.isEmpty {
+                if !recopies.isEmpty { plan.toCopy.append(PlannedGroup(files: recopies, isLivePhoto: group.isLivePhoto)) }
+                continue
+            }
 
             // If part of the group is already copied, the rest goes next to it.
             var dir = directory(for: group, layout: layout, calendar: calendar)
@@ -195,23 +256,29 @@ public enum CopyPlanner {
             var n = 1
             placing: while true {
                 let stem = n == 1 ? base : "\(base) (\(n))"
-                var toCopy: [PlannedFile] = []
+                var toCopy: [PlannedFile] = recopies
                 var adopted: [PlannedFile] = []
                 for file in remaining {
                     let ext = (file.path as NSString).pathExtension
                     let rel = (dir as NSString).appendingPathComponent(ext.isEmpty ? stem : "\(stem).\(ext)")
+                    // Two files in this plan can't share a path, under either policy.
                     if reserved.contains(rel.lowercased()) {
                         n += 1
                         continue placing
                     }
                     if let local = localFile(destination.appendingPathComponent(rel)) {
-                        guard isSame(local, as: file) else {
+                        let same = isSame(local, as: file)
+                        switch (policy, same) {
+                        case (.overwrite, _):
+                            toCopy.append(PlannedFile(remote: file, localPath: rel, replaces: true, nameConflict: !same))
+                        case (.skipDuplicates, true):
+                            adopted.append(PlannedFile(remote: file, localPath: rel))
+                        case (.skipDuplicates, false):
                             n += 1
                             continue placing
                         }
-                        adopted.append(PlannedFile(remote: file, localPath: rel))
                     } else {
-                        toCopy.append(PlannedFile(remote: file, localPath: rel))
+                        toCopy.append(PlannedFile(remote: file, localPath: rel, nameConflict: n > 1))
                     }
                 }
                 for f in toCopy + adopted { reserved.insert(f.localPath.lowercased()) }

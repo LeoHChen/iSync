@@ -218,13 +218,18 @@ public final class PhotoCopyEngine {
                 guard got == file.remote.size, onDisk == file.remote.size else {
                     throw ISyncError("Size check failed: expected \(file.remote.size) bytes, got \(onDisk ?? got).")
                 }
-                // Never replace a file that appeared since planning.
-                try fileManager.moveItem(at: temp, to: final)
+                let hash = try? sha256(file: temp)
+                if file.replaces, fileManager.fileExists(atPath: final.path) {
+                    _ = try fileManager.replaceItemAt(final, withItemAt: temp)
+                } else {
+                    // Without `replaces`, a file that appeared since planning is left alone.
+                    try fileManager.moveItem(at: temp, to: final)
+                }
                 try? fileManager.setAttributes(
                     [.modificationDate: file.remote.modified, .creationDate: file.remote.modified], ofItemAtPath: final.path)
                 shared.with {
                     $0.copiedFiles += 1
-                    $0.manifest.record(file.remote, localPath: file.localPath)
+                    $0.manifest.record(file.remote, localPath: file.localPath, sha256: hash)
                     $0.manifestDirty = true
                 }
                 return

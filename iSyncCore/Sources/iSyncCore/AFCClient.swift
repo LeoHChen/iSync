@@ -1,4 +1,5 @@
 import CIMobileDevice
+import CryptoKit
 import Foundation
 
 public struct RemoteFile: Hashable, Sendable, Codable {
@@ -71,6 +72,8 @@ struct TransferCancelled: Error {}
 /// Reads remote files on one connection. The engine depends on this so tests can use a fake.
 public protocol RemoteFileReader: AnyObject {
     func copy(remote: String, to local: URL, chunk: Int, control: TransferControl, onBytes: (Int) -> Void) throws -> Int64
+    /// Reads a remote file and returns its SHA-256 without saving it.
+    func sha256(remote: String, chunk: Int, control: TransferControl, onBytes: (Int) -> Void) throws -> String
 }
 
 public final class AFCClient: RemoteFileReader {
@@ -168,6 +171,28 @@ public final class AFCClient: RemoteFileReader {
             onBytes(Int(got))
         }
         return total
+    }
+
+    public func sha256(remote: String, chunk: Int = 1 << 20, control: TransferControl, onBytes: (Int) -> Void) throws -> String {
+        var handle: UInt64 = 0
+        let opened = afc_file_open(ptr, remote, AFC_FOPEN_RDONLY, &handle)
+        guard opened == AFC_E_SUCCESS else { throw failure("Open \(remote)", opened) }
+        defer { afc_file_close(ptr, handle) }
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: chunk)
+        defer { buffer.deallocate() }
+        var hasher = SHA256()
+        while true {
+            guard control.checkpoint() else { throw TransferCancelled() }
+            var got: UInt32 = 0
+            let read = buffer.withMemoryRebound(to: CChar.self, capacity: chunk) {
+                afc_file_read(ptr, handle, $0, UInt32(chunk), &got)
+            }
+            if read == AFC_E_END_OF_DATA || (read == AFC_E_SUCCESS && got == 0) { break }
+            guard read == AFC_E_SUCCESS else { throw failure("Read \(remote)", read) }
+            hasher.update(bufferPointer: UnsafeRawBufferPointer(start: buffer, count: Int(got)))
+            onBytes(Int(got))
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// Streams a local file to the phone.
