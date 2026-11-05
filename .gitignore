@@ -36,4 +36,4 @@ iSyncProbe-out/
 
 # Generated from project.yml by XcodeGen
 *.xcodeproj/
-iSyncApp/build/
+build/
