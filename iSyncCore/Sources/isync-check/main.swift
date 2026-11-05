@@ -6,6 +6,9 @@ import iSyncCore
 //   isync-check info
 //   isync-check photos --dest <folder> [--limit 50] [--layout sameAsIPhone|yearMonth]
 //   isync-check files  [--bundle <id>]
+//   isync-check sync --dest <folder> [--limit 50] [--policy skipDuplicates|overwrite] [--reference <folder>] [--copy]
+//   isync-check compare --other <udid>|self
+//   isync-check music --dest <folder> [--limit 20] [--policy skipDuplicates|overwrite] [--copy] [--drm-check]
 // Only `files` writes to the phone. It deletes only its own uniquely named test items.
 
 func say(_ s: String) { print(s); fflush(stdout) }
@@ -153,7 +156,146 @@ case "files":
         say("PASS")
     } catch { fail("\(error.localizedDescription)") }
 
+case "sync":
+    guard let destPath = option("--dest") else { fail("--dest is required") }
+    let dest = URL(fileURLWithPath: destPath)
+    let limit = Int(option("--limit") ?? "50") ?? 50
+    let policy = ConflictPolicy(rawValue: option("--policy") ?? "skipDuplicates") ?? .skipDuplicates
+    let key = deviceKey(udid: udid)
+    func show(_ p: SyncPreview, _ label: String) {
+        say("\(label): \(p.total.files) files, \(Format.bytes(p.total.bytes))")
+        for c in SyncCategory.allCases { say("  \(c.rawValue): \(p.tally(c).files), \(Format.bytes(p.tally(c).bytes))") }
+        say("  to copy: \(p.plan.toCopyFiles), \(Format.bytes(p.plan.toCopyBytes)); replaces: \(p.plan.replaceFiles); unconfirmed: \(p.unconfirmed.count), \(Format.bytes(p.unconfirmedBytes))")
+    }
+    do {
+        let t0 = Date()
+        let library = try PhoneLibraryIndex.fetch(udid: udid)
+        say(String(format: "photos database: %d assets in %.1f s", library.assets.count, Date().timeIntervalSince(t0)))
+        let all = try PhotoScanner.scan(udid: udid)
+        var subset: [RemoteFile] = []
+        for g in PhotoGrouping.groups(from: all) where subset.count < limit { subset += g.files }
+        let prints = library.fingerprints
+        let known = subset.filter { prints[$0.path] != nil }.count
+        say("sample: \(subset.count) files, \(known) with database details")
+
+        let destIndex = FolderIndex(folder: dest)
+        let refIndex = option("--reference").map { FolderIndex(folder: URL(fileURLWithPath: $0)) }
+        let t1 = Date()
+        destIndex.refresh()
+        refIndex?.refresh()
+        say(String(format: "indexed %d files in the destination and %d in the reference folder in %.1f s", destIndex.allFiles.count, refIndex?.allFiles.count ?? 0, Date().timeIntervalSince(t1)))
+
+        var manifest = CopyManifest.load(destination: dest, deviceKey: key)
+        let options = SyncOptions(policy: policy)
+        func preview() -> SyncPreview {
+            SyncPlanner.preview(
+                files: subset, fingerprints: prints, destination: dest, manifest: manifest,
+                destinationFiles: destIndex.allFiles, referenceFiles: refIndex?.allFiles ?? [], options: options)
+        }
+        var p = preview()
+        show(p, "preview")
+        if !args.contains("--copy") { say("dry run: nothing copied"); break }
+
+        if p.needsVerification {
+            let t2 = Date()
+            let verifier = DuplicateVerifier(readerFactory: { try AFCClient.connect(udid: udid) })
+            let result = verifier.run(candidates: p.unconfirmed, manifest: manifest, indexes: [destIndex, refIndex].compactMap { $0 }, control: TransferControl()) { _ in }
+            manifest = result.manifest
+            try manifest.save(destination: dest)
+            say(String(format: "verified %d candidates in %.1f s, failures %d", p.unconfirmed.count, Date().timeIntervalSince(t2), result.failures.count))
+            p = preview()
+            show(p, "after SHA-256")
+        }
+        let sem = DispatchSemaphore(value: 0)
+        var r = PhotoCopyEngine.Result()
+        let engine = PhotoCopyEngine(plan: p.plan, destination: dest, manifest: manifest, readerFactory: { try AFCClient.connect(udid: udid) })
+        engine.start(onProgress: { _ in }, onFinish: { r = $0; sem.signal() })
+        sem.wait()
+        say(String(format: "copied %d files, %@, %.1f MB/s, failed %d, stop=%@", r.copiedFiles, Format.bytes(r.copiedBytes), r.averageBytesPerSecond / 1e6, r.failures.count, r.stopReason ?? "none"))
+
+        destIndex.refresh()
+        manifest = CopyManifest.load(destination: dest, deviceKey: key)
+        let again = preview()
+        show(again, "second preview")
+        say(again.plan.toCopyFiles == 0 || policy == .overwrite ? "PASS" : "FAIL: a repeat run would copy files")
+    } catch { fail("\(error.localizedDescription)") }
+
+case "compare":
+    guard let other = option("--other") else { fail("--other <udid>|self is required") }
+    let otherUDID = other == "self" ? udid : other
+    do {
+        let t0 = Date()
+        let source = try PhoneLibraryIndex.fetch(udid: udid)
+        let target = try PhoneLibraryIndex.fetch(udid: otherUDID)
+        let sourceFiles = try PhotoScanner.scan(udid: udid)
+        let targetFiles = try PhotoScanner.scan(udid: otherUDID)
+        let c = PhoneComparer.compare(source: source, destination: target, sourceFiles: sourceFiles, destinationFiles: targetFiles)
+        say(String(format: "compared in %.1f s, from metadata only. Source assets %d, destination assets %d", Date().timeIntervalSince(t0), source.assets.count, target.assets.count))
+        say("  already on destination: \(c.alreadyOnDestination.files), \(Format.bytes(c.alreadyOnDestination.bytes))")
+        say("  possible duplicates: \(c.possibleDuplicates.files), \(Format.bytes(c.possibleDuplicates.bytes))")
+        say("  new: \(c.new.files), \(Format.bytes(c.new.bytes))")
+        // A small sample proves the metadata match against real bytes.
+        let sample = Int(option("--hash-sample") ?? "0") ?? 0
+        if sample > 0, !c.candidates.isEmpty {
+            let a = try AFCClient.connect(udid: udid), b = try AFCClient.connect(udid: otherUDID)
+            let control = TransferControl()
+            var same = 0, tested = 0
+            let step = max(1, c.candidates.count / sample)
+            for i in stride(from: 0, to: c.candidates.count, by: step).prefix(sample) {
+                let pair = c.candidates[i]
+                let x = try a.sha256(remote: pair.source, control: control) { _ in }
+                let y = try b.sha256(remote: pair.destination, control: control) { _ in }
+                tested += 1
+                if x == y { same += 1 }
+            }
+            say("  SHA-256 sample: \(same) of \(tested) candidates identical")
+        }
+    } catch { fail("\(error.localizedDescription)") }
+
+case "music":
+    let policy = ConflictPolicy(rawValue: option("--policy") ?? "skipDuplicates") ?? .skipDuplicates
+    let key = deviceKey(udid: udid) + "-music"
+    do {
+        let tracks = try MusicLibrary.fetch(udid: udid)
+        let s = MusicSummary(tracks)
+        say("library: \(s.total) music items. copyable \(s.copyable) (\(Format.bytes(s.copyableBytes))), protected \(s.protected), not on iPhone \(s.notOnIPhone), subscription flag \(s.subscriptionFlagged)")
+        var reasons: [String: Int] = [:]
+        for t in tracks { if case .protected(let r) = t.status { reasons[r, default: 0] += 1 } }
+        if !reasons.isEmpty { say("  protected because: \(reasons)") }
+        guard let destPath = option("--dest") else { break }
+        let dest = URL(fileURLWithPath: destPath)
+        var chosen = tracks.filter { $0.status == .copyable }
+        if let limit = option("--limit").flatMap(Int.init) { chosen = Array(chosen.prefix(limit)) }
+        func plan() -> MusicPlanner.Preview {
+            MusicPlanner.plan(tracks: chosen, destination: dest, manifest: CopyManifest.load(destination: dest, deviceKey: key), policy: policy)
+        }
+        let p = plan()
+        say("preview: new \(p.new.files), already copied \(p.alreadyCopied.files), same name different \(p.sameNameDifferent.files), to copy \(p.plan.toCopyFiles), \(Format.bytes(p.plan.toCopyBytes))")
+        if !args.contains("--copy") { say("dry run: nothing copied"); break }
+        let sem = DispatchSemaphore(value: 0)
+        var r = PhotoCopyEngine.Result()
+        let engine = PhotoCopyEngine(plan: p.plan, destination: dest, manifest: CopyManifest.load(destination: dest, deviceKey: key), readerFactory: { try AFCClient.connect(udid: udid) })
+        engine.start(onProgress: { _ in }, onFinish: { r = $0; sem.signal() })
+        sem.wait()
+        say(String(format: "copied %d tracks, %@, %.1f MB/s, failed %d, stop=%@", r.copiedFiles, Format.bytes(r.copiedBytes), r.averageBytesPerSecond / 1e6, r.failures.count, r.stopReason ?? "none"))
+        for f in r.failures.prefix(5) { say("  failed: \(f.reason)") }
+        let again = plan()
+        say("second preview: to copy \(again.plan.toCopyFiles), already copied \(again.alreadyCopied.files)")
+        if args.contains("--drm-check") {
+            let manifest = CopyManifest.load(destination: dest, deviceKey: key)
+            let done = DispatchSemaphore(value: 0)
+            let urls = manifest.entries.values.map { dest.appendingPathComponent($0.localPath) }
+            Task.detached {
+                var protected = 0
+                for url in urls where await MusicLibrary.hasDRM(url) { protected += 1 }
+                say("DRM check on \(urls.count) copied files: \(protected) protected")
+                done.signal()
+            }
+            done.wait()
+        }
+    } catch { fail("\(error.localizedDescription)") }
+
 default:
-    say("usage: isync-check info | photos --dest <folder> [--limit 50] [--layout sameAsIPhone|yearMonth] | files [--bundle <id>]")
+    say("usage: isync-check info | photos --dest <folder> [--limit 50] [--layout sameAsIPhone|yearMonth] | files [--bundle <id>] | sync --dest <folder> | compare --other <udid>|self | music [--dest <folder>]")
     exit(2)
 }
