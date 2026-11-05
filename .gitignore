@@ -3,6 +3,7 @@
 
 # Swift Package Manager
 .build/
+build-next/
 .swiftpm/
 Package.resolved
 
@@ -37,3 +38,4 @@ iSyncProbe-out/
 # Generated from project.yml by XcodeGen
 *.xcodeproj/
 build/
+build-next/

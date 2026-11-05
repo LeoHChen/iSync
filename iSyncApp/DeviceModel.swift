@@ -19,6 +19,7 @@ final class DeviceModel: ObservableObject, Identifiable {
     @Published private(set) var linkSpeed: String?
 
     private(set) lazy var photos = PhotosModel(device: self)
+    private(set) lazy var music = MusicModel(device: self)
     private(set) lazy var files = FilesModel(udid: udid)
     private var loop: Task<Void, Never>?
 

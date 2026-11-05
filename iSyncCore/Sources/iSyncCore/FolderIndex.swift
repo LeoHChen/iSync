@@ -34,8 +34,10 @@ public final class FolderIndex {
 
     public var allFiles: [IndexedFile] { files.with { Array($0.values) } }
 
-    /// Walks the folder, skipping hidden files, and reads anything new or changed.
-    public func refresh(onProgress: ((Int, Int) -> Void)? = nil) {
+    /// Walks the folder, skipping hidden files, and reads anything new or changed. `known`
+    /// holds details already on hand for a path, such as files iSync copied itself, which saves
+    /// opening them.
+    public func refresh(known: [String: MediaFingerprint] = [:], onProgress: ((Int, Int) -> Void)? = nil) {
         let fm = FileManager.default
         var found: [(URL, Int64, Double)] = []
         if let walker = fm.enumerator(
@@ -53,8 +55,10 @@ public final class FolderIndex {
         var fresh: [String: IndexedFile] = [:]
         var toRead: [(URL, Int64, Double)] = []
         for item in found {
-            if let known = existing[item.0.path], known.size == item.1, known.modified == item.2 {
-                fresh[item.0.path] = known
+            if let cached = existing[item.0.path], cached.size == item.1, cached.modified == item.2 {
+                fresh[item.0.path] = cached
+            } else if let print = known[item.0.path], print.size == item.1 {
+                fresh[item.0.path] = IndexedFile(path: item.0.path, size: item.1, modified: item.2, fingerprint: print)
             } else {
                 toRead.append(item)
             }

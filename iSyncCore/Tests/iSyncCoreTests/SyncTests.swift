@@ -174,6 +174,18 @@ final class SyncPlannerTests: XCTestCase {
         XCTAssertEqual(p.plan.toCopyFiles, 0)
     }
 
+    func testAHashFromTheEngineMeansNoHashingOnTheNextPreview() throws {
+        // First run copied A and hashed it. B is the same photo. Nothing should need reading again.
+        let a = remote("/DCIM/100APPLE/A.HEIC"), b = remote("/DCIM/101APPLE/B.HEIC")
+        let there = try indexed("DCIM/100APPLE/A.HEIC", at: Double(a.modifiedNs) / 1e9)
+        var m = CopyManifest(deviceKey: "k")
+        m.record(a, localPath: "DCIM/100APPLE/A.HEIC", sha256: "same")
+        m.recordSourceHash(b, sha256: "same")
+        let p = preview([a, b], prints: [a.path: print(), b.path: print()], manifest: m, dest: [there])
+        XCTAssertFalse(p.needsVerification)
+        XCTAssertEqual(p.tally(.exactDuplicate).files, 1)
+    }
+
     func testSameContentTwiceOnThePhoneIsCopiedOnce() {
         let a = remote("/DCIM/100APPLE/A.HEIC"), b = remote("/DCIM/101APPLE/B.HEIC")
         var m = CopyManifest(deviceKey: "k")
@@ -409,6 +421,23 @@ final class FolderIndexTests: XCTestCase {
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 2000)], ofItemAtPath: url.path)
         second.refresh()
         XCTAssertNil(second.allFiles.first?.sha256)
+    }
+
+    func testKnownDetailsSaveOpeningTheFile() throws {
+        let url = try makePhoto("a.jpeg", date: "2026:11:02 19:33:25")
+        let size = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)!.int64Value
+        let given = MediaFingerprint(size: size, capture: "19990101000000", width: 1, height: 2)
+        let index = FolderIndex(folder: dir, cacheDirectory: cache)
+        index.refresh(known: [canonicalPath(url): given])
+        XCTAssertEqual(index.allFiles.first?.fingerprint.capture, "19990101000000")
+    }
+
+    func testKnownDetailsAreIgnoredIfTheSizeChanged() throws {
+        let url = try makePhoto("a.jpeg", date: "2026:11:02 19:33:25")
+        let given = MediaFingerprint(size: 1, capture: "19990101000000", width: 1, height: 2)
+        let index = FolderIndex(folder: dir, cacheDirectory: cache)
+        index.refresh(known: [canonicalPath(url): given])
+        XCTAssertEqual(index.allFiles.first?.fingerprint.capture, "20261102193325")
     }
 
     func testIndexingNeverWritesIntoTheFolder() throws {

@@ -104,6 +104,16 @@ public struct CopyManifest: Codable, Equatable, Sendable {
         if let sha256 { recordSourceHash(file, sha256: sha256) }
     }
 
+    /// Details for files iSync copied, by their path on this Mac, so they needn't be opened.
+    public func knownFingerprints(destination: URL, fingerprints: [String: MediaFingerprint]) -> [String: MediaFingerprint] {
+        let root = canonicalPath(destination) + "/"
+        var out: [String: MediaFingerprint] = [:]
+        for (remote, e) in entries {
+            out[root + e.localPath] = fingerprints[remote] ?? MediaFingerprint(size: e.size)
+        }
+        return out
+    }
+
     public mutating func recordSourceHash(_ file: RemoteFile, sha256: String) {
         if sourceHashes == nil { sourceHashes = [:] }
         sourceHashes?[file.path] = SourceHash(size: file.size, modifiedNs: file.modifiedNs, sha256: sha256)

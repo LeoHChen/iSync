@@ -3,12 +3,13 @@ import iSyncCore
 
 enum SidebarItem: Hashable {
     case photos(String)
+    case music(String)
     case files(String)
     case addToIPhone(String)
 
     var udid: String {
         switch self {
-        case .photos(let u), .files(let u), .addToIPhone(let u): return u
+        case .photos(let u), .music(let u), .files(let u), .addToIPhone(let u): return u
         }
     }
 }
@@ -33,7 +34,7 @@ final class AppModel: ObservableObject {
 
     private func update(connected udids: [String]) {
         for device in devices where !udids.contains(device.udid) {
-            if device.photos.isCopying {
+            if device.photos.isCopying || device.music.isCopying {
                 notice = "\(device.displayName) was unplugged during a copy. Finished files are saved. Plug it back in to continue."
             }
             device.stop()

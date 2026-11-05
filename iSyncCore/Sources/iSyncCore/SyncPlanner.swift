@@ -110,11 +110,17 @@ public enum SyncPlanner {
             }
         }
 
+        // Copies made by the engine already have a hash, so they never need hashing again.
+        let destinationRoot = canonicalPath(destination) + "/"
+        var hashByLocalPath: [String: String] = [:]
+        for e in manifest.entries.values {
+            if let hash = e.sha256 { hashByLocalPath[destinationRoot + e.localPath] = hash }
+        }
+
         let groups = PhotoGrouping.groups(from: safe)
         var duplicates: [String: Duplicate] = [:]
         var possibles: [String: String] = [:]
         var seenInRun: [String: RemoteFile] = [:]
-        let destinationRoot = canonicalPath(destination) + "/"
 
         for group in groups {
             let dir = CopyPlanner.directory(for: group, layout: options.layout, calendar: calendar)
@@ -133,7 +139,7 @@ public enum SyncPlanner {
                     .sorted { $0.1 && !$1.1 }
                 search: for (item, isDestination) in candidates {
                     let target: DuplicateTarget = isDestination ? .destination(item) : .reference(item)
-                    if let sourceHash, let known = item.sha256 {
+                    if let sourceHash, let known = item.sha256 ?? hashByLocalPath[item.path] {
                         if sourceHash == known {
                             duplicates[file.path] = .confirmed(target)
                             break search

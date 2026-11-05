@@ -68,6 +68,7 @@ private struct DeviceSection: View {
                 .padding(.vertical, 4)
             if device.status == .ready {
                 Label("Photos", systemImage: "photo.on.rectangle").tag(SidebarItem.photos(device.udid))
+                Label("Music", systemImage: "music.note").tag(SidebarItem.music(device.udid))
                 Label("Files", systemImage: "folder").tag(SidebarItem.files(device.udid))
                 Label("Add to iPhone", systemImage: "plus.rectangle.on.rectangle")
                     .foregroundStyle(.secondary)
@@ -152,6 +153,7 @@ private struct DeviceDetail: View {
         case .ready:
             switch item {
             case .photos: PhotosView(model: device.photos, device: device)
+            case .music: MusicView(model: device.music)
             case .files: FilesView(model: device.files)
             case .addToIPhone: AddToIPhoneView()
             }

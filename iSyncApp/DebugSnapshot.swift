@@ -5,7 +5,7 @@ import iSyncCore
 /// Automated checks for debug builds only. Release builds don't contain this file's code.
 ///
 /// ISYNC_SNAPSHOT=<file.png> saves a picture of the window, then quits.
-///   ISYNC_SNAPSHOT_ITEM picks the page: photos, files or add.
+///   ISYNC_SNAPSHOT_ITEM picks the page: photos, music, files or add.
 ///   ISYNC_SNAPSHOT_APP picks an app on the Files page, by bundle ID.
 /// ISYNC_SELFTEST=<file.json> drives the real models on a connected iPhone, then quits.
 ///   ISYNC_TEST_DEST is the photo folder. ISYNC_TEST_LIMIT is how many recent files to copy.
@@ -14,6 +14,11 @@ import iSyncCore
 enum DebugSnapshot {
     static func scheduleIfRequested(_ model: AppModel) {
         let env = ProcessInfo.processInfo.environment
+        if env["ISYNC_SELFTEST"] != nil || env["ISYNC_SNAPSHOT"] != nil {
+            // Stay out of the way of anything the user is doing on this Mac.
+            NSApp.setActivationPolicy(.accessory)
+            NSApp.windows.forEach { $0.orderBack(nil) }
+        }
         if let path = env["ISYNC_SELFTEST"] {
             Task { @MainActor in await selfTest(model, env: env, resultPath: path) }
         } else if let path = env["ISYNC_SNAPSHOT"] {
@@ -46,6 +51,7 @@ enum DebugSnapshot {
                         device.files.select(app)
                     }
                 }
+            case "music": model.selection = .music(udid)
             case "add": model.selection = .addToIPhone(udid)
             default: model.selection = .photos(udid)
             }
@@ -111,12 +117,13 @@ enum DebugSnapshot {
         if let dest = env["ISYNC_TEST_DEST"] {
             photos.debugUse(destination: URL(fileURLWithPath: dest), limit: Int(env["ISYNC_TEST_LIMIT"] ?? "") ?? 50)
             photos.loadIfNeeded()
-            let planned = await waitFor(30) { photos.phase == .ready && photos.plan != nil && !photos.isPlanning }
+            let planned = await waitFor(120) { photos.phase == .ready && photos.plan != nil && !photos.isPlanning }
             r["photosPlanned"] = planned
             r["firstPlanToCopy"] = photos.plan?.toCopyFiles ?? -1
+            r["firstPreviewUnconfirmed"] = photos.preview?.unconfirmed.count ?? -1
             // Cancel first, then the rest of the copy picks up what's left.
             photos.startCopy()
-            _ = await waitFor(10) { photos.progress.copiedBytes > 0 }
+            _ = await waitFor(30) { photos.isCopying && photos.progress.copiedBytes > 0 }
             try? await Task.sleep(for: .seconds(3))
             photos.cancel()
             _ = await waitFor(30) { photos.phase == .ready && photos.lastResult != nil && !photos.isPlanning }
@@ -136,7 +143,7 @@ enum DebugSnapshot {
             try? await Task.sleep(for: .seconds(1.5))
             let pausedAt = photos.progress.copiedBytes
             try? await Task.sleep(for: .seconds(2))
-            r["pauseHeld"] = photos.progress.copiedBytes == pausedAt && photos.isPaused
+            r["pauseHeld"] = photos.progress.copiedBytes == pausedAt && photos.progress.isPaused
             r["pausedBytes"] = pausedAt
             if let shot = env["ISYNC_TEST_SHOT"] { save(to: shot + "-paused.png") }
             photos.resume()
@@ -155,6 +162,36 @@ enum DebugSnapshot {
             _ = await waitFor(10) { !photos.isPlanning }
             r["toCopyAfterLayoutChange"] = photos.plan?.toCopyFiles ?? -1
             photos.layout = savedLayout
+            _ = await waitFor(10) { !photos.isPlanning }
+
+            // Overwrite should plan replacements, then switch back.
+            photos.policy = .overwrite
+            _ = await waitFor(10) { !photos.isPlanning }
+            r["overwriteWouldReplace"] = photos.plan?.replaceFiles ?? -1
+            photos.policy = .skipDuplicates
+            _ = await waitFor(10) { !photos.isPlanning }
+            r["toCopyAfterPolicyBack"] = photos.plan?.toCopyFiles ?? -1
+            if let shot = env["ISYNC_TEST_SHOT"] { save(to: shot + "-photos.png") }
+        }
+
+        // Music
+        if let dest = env["ISYNC_TEST_MUSIC_DEST"] {
+            let music = device.music
+            music.debugUse(destination: URL(fileURLWithPath: dest), limit: Int(env["ISYNC_TEST_MUSIC_LIMIT"] ?? "") ?? 10)
+            music.loadIfNeeded()
+            _ = await waitFor(60) { music.phase == .ready && music.preview != nil }
+            r["musicTracks"] = music.tracks.count
+            r["musicToCopy"] = music.preview?.plan.toCopyFiles ?? -1
+            music.startCopy()
+            let copied = await waitFor(120) { music.phase == .ready && music.lastResult != nil }
+            r["musicFinished"] = copied
+            r["musicCopied"] = music.lastResult?.copiedFiles ?? -1
+            r["musicFailed"] = music.lastResult?.failures.count ?? -1
+            _ = await waitFor(5) { music.preview?.plan.toCopyFiles == 0 }
+            r["musicToCopyAfter"] = music.preview?.plan.toCopyFiles ?? -1
+            model.selection = .music(device.udid)
+            try? await Task.sleep(for: .seconds(1))
+            if let shot = env["ISYNC_TEST_SHOT"] { save(to: shot + "-music.png") }
         }
 
         // Files
