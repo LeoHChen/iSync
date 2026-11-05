@@ -25,6 +25,7 @@ final class ICCDownload: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelega
     private var nextReport = Date()
     private var waitingForUnlock = false
     private var catalogHandled = false
+    private var itemsAddedLater = 0
     private let unlockDeadline = Date().addingTimeInterval(900)
 
     init(udid: String, deviceName: String, sample: [RemoteFile], outstanding: Int) {
@@ -65,6 +66,10 @@ final class ICCDownload: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelega
         result["bytes"] = bytes
         result["outstandingRequests"] = outstanding
         result["errors"] = Array(errors.prefix(5))
+        // Shows whether the catalog kept growing after the "complete" callback.
+        result["catalogItemsAtEnd"] = camera?.mediaFiles?.count ?? -1
+        result["catalogPercent"] = camera?.contentCatalogPercentCompleted ?? -1
+        result["itemsAddedAfterOpen"] = itemsAddedLater
         if let failure {
             result["failure"] = failure
         } else {
@@ -120,7 +125,7 @@ final class ICCDownload: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelega
 
     func device(_ device: ICDevice, didCloseSessionWithError error: Error?) {}
 
-    func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) {}
+    func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) { itemsAddedLater += items.count }
     func cameraDevice(_ camera: ICCameraDevice, didRemove items: [ICCameraItem]) {}
     func cameraDevice(_ camera: ICCameraDevice, didReceiveThumbnail thumbnail: CGImage?, for item: ICCameraItem, error: Error?) {}
     func cameraDevice(_ camera: ICCameraDevice, didReceiveMetadata metadata: [AnyHashable: Any]?, for item: ICCameraItem, error: Error?) {}
@@ -179,6 +184,13 @@ final class ICCDownload: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelega
             }
         }
         log("      ICC matched \(queue.count) of \(sample.count) sample files by name")
+        // Extensions only, so no file names end up in the results.
+        var missing: [String: Int] = [:]
+        let matched = Set(queue.map(\.localName))
+        for rf in sample where !matched.contains(localName(rf.path)) {
+            missing[(rf.path as NSString).pathExtension.uppercased(), default: 0] += 1
+        }
+        result["unmatchedByExtension"] = missing
         guard !queue.isEmpty else {
             finish(failure: "no sample file matched a catalog item")
             return
