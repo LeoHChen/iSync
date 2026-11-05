@@ -31,7 +31,10 @@ public final class Locked<T> {
 
 public enum Format {
     public static func bytes(_ n: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: n, countStyle: .file)
+        let f = ByteCountFormatter()
+        f.countStyle = .file
+        f.allowsNonnumericFormatting = false
+        return f.string(fromByteCount: n)
     }
 
     public static func duration(_ seconds: Double) -> String {

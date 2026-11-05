@@ -232,8 +232,11 @@ public final class PhotoCopyEngine {
                 try? fileManager.removeItem(at: temp)
                 shared.with { $0.copiedBytes -= bytesThisAttempt }
                 if error is TransferCancelled { return }
-                if let e = error as? CocoaError, e.isFileError, e.code != .fileWriteFileExists {
-                    stopAll("Couldn't write to the destination folder: \(e.localizedDescription)")
+                // Anything that isn't from the phone is a problem with the Mac's disk, such as
+                // running out of space, and every other file would hit it too.
+                let isCollision = (error as? CocoaError)?.code == .fileWriteFileExists
+                if !isCollision, !(error is AFCError), !(error is ISyncError) {
+                    stopAll("Couldn't write to the destination folder: \(error.localizedDescription)")
                     return
                 }
                 if let e = error as? AFCError, e.isFileLevel {

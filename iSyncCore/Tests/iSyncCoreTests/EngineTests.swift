@@ -14,6 +14,8 @@ final class FakeReader: RemoteFileReader {
     let behaviour: Locked<Behaviour>
     let order: Locked<[(Int, String)]>
     let id: Int
+    /// A connection that has failed stays broken, like a real one.
+    private var isBroken = false
 
     init(id: Int, behaviour: Locked<Behaviour>, order: Locked<[(Int, String)]>) {
         self.id = id
@@ -22,11 +24,13 @@ final class FakeReader: RemoteFileReader {
     }
 
     func copy(remote: String, to local: URL, chunk: Int, control: TransferControl, onBytes: (Int) -> Void) throws -> Int64 {
+        if isBroken { throw AFCError(operation: "Read", code: 30, text: "connection closed") }
         order.with { $0.append((id, remote)) }
         let b = behaviour.with { $0 }
         if b.missing.contains(remote) { throw AFCError(operation: "Open", code: 8, text: "not found") }
         if b.failOnce.contains(remote) {
             behaviour.with { $0.failOnce.remove(remote) }
+            isBroken = true
             throw AFCError(operation: "Read", code: 30, text: "mux error")
         }
         var size = b.contents[remote] ?? 0
@@ -215,6 +219,26 @@ final class EngineTests: XCTestCase {
         e.resume()
         wait(for: [done], timeout: 30)
         XCTAssertEqual(result.copiedFiles, 6)
+    }
+
+    func testDiskProblemStopsTheWholeCopy() {
+        // A file sits where the first folder needs to go.
+        FileManager.default.createFile(atPath: dir.appendingPathComponent("DCIM").path, contents: Data())
+        let r = run(engine([file("/DCIM/100APPLE/A.HEIC"), file("/DCIM/100APPLE/B.HEIC")]))
+        XCTAssertEqual(r.copiedFiles, 0)
+        XCTAssertTrue(r.stopReason?.contains("destination folder") == true)
+    }
+
+    func testFileAppearingAfterPlanningIsNotReplaced() throws {
+        let a = file("/DCIM/100APPLE/A.HEIC")
+        let e = engine([a])
+        let existing = dir.appendingPathComponent("DCIM/100APPLE/A.HEIC")
+        try FileManager.default.createDirectory(at: existing.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("mine".utf8).write(to: existing)
+        let r = run(e)
+        XCTAssertEqual(r.copiedFiles, 0)
+        XCTAssertEqual(r.failures.count, 1)
+        XCTAssertEqual(try Data(contentsOf: existing), Data("mine".utf8))
     }
 
     func testNoConnectionAtAllReportsAReason() {
