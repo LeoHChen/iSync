@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>net.leochen.isync.probe</string>
+    <string>com.isync.probe</string>
     <key>CFBundleName</key>
     <string>iSyncProbe</string>
     <key>CFBundleVersion</key>
