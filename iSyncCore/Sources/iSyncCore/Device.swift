@@ -137,7 +137,9 @@ public enum DeviceInfo {
 
         if let disk = lockdown.value(domain: "com.apple.disk_usage") as? [String: Any] {
             s.storageTotal = (disk["TotalDataCapacity"] as? NSNumber)?.int64Value
-            s.storageFree = (disk["TotalDataAvailable"] as? NSNumber)?.int64Value
+            // AmountDataAvailable is the real free space. TotalDataAvailable reads far too
+            // high: it showed 435 GB on a phone with 16.5 GB free.
+            s.storageFree = (disk["AmountDataAvailable"] as? NSNumber)?.int64Value
         }
         if let battery = lockdown.value(domain: "com.apple.mobile.battery") as? [String: Any] {
             s.batteryPercent = (battery["BatteryCurrentCapacity"] as? NSNumber)?.intValue
