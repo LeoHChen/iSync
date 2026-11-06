@@ -1,0 +1,44 @@
+THIRD-PARTY NOTICES
+
+iSync's own code is under the MIT License (see LICENSE). The iSync release package
+also includes the libraries below as separate dynamic libraries, in
+iSync.app/Contents/Frameworks. They keep their own licenses.
+
+Under the LGPL, you may replace these libraries with your own builds. Put a compatible
+build in Contents/Frameworks and re-sign the app, for example with:
+
+    codesign --force --deep --sign - iSync.app
+
+Full license texts are in the licenses folder of this repository, and in
+iSync.app/Contents/Resources/licenses in the release package.
+
+
+libimobiledevice 1.4.0
+  Copyright (c) the libimobiledevice contributors
+  License: GNU Lesser General Public License v2.1 or later (licenses/LGPL-2.1.txt)
+  Source: https://github.com/libimobiledevice/libimobiledevice
+
+libimobiledevice-glue 1.3.3
+  Copyright (c) the libimobiledevice contributors
+  License: GNU Lesser General Public License v2.1 or later (licenses/LGPL-2.1.txt)
+  Source: https://github.com/libimobiledevice/libimobiledevice-glue
+
+libplist 2.8.0
+  Copyright (c) the libimobiledevice contributors
+  License: GNU Lesser General Public License v2.1 or later (licenses/LGPL-2.1.txt)
+  Source: https://github.com/libimobiledevice/libplist
+
+libusbmuxd 2.1.1
+  Copyright (c) the libimobiledevice contributors
+  License: The library is under the GNU Lesser General Public License v2.1 or later
+  (licenses/LGPL-2.1.txt). iSync doesn't include the project's GPL command-line tools.
+  Source: https://github.com/libimobiledevice/libusbmuxd
+
+OpenSSL 4.1.0
+  Copyright (c) the OpenSSL Project Authors
+  License: Apache License 2.0 (licenses/OpenSSL-Apache-2.0.txt)
+  Source: https://github.com/openssl/openssl
+
+
+The app icon is original to this project (design/isync-icon.svg) and is under the MIT
+License. iPhone, Mac, macOS, Finder and iOS are trademarks of Apple Inc.

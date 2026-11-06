@@ -3,6 +3,10 @@
 
 # Swift Package Manager
 .build/
+build-next/
+build-release/
+dist/
+.venv/
 .swiftpm/
 Package.resolved
 
@@ -33,3 +37,11 @@ iSyncProbe-out/
 # Device pair records contain private keys
 *.pairrecord
 *.plist.pair
+
+# Generated from project.yml by XcodeGen
+*.xcodeproj/
+build/
+build-next/
+build-release/
+dist/
+.venv/

@@ -1,0 +1,39 @@
+# Generates iSync.xcodeproj. Run `xcodegen generate` after changing this file.
+name: iSync
+options:
+  bundleIdPrefix: io.github.leohchen
+  deploymentTarget:
+    # The Homebrew libraries the app links are built for macOS 27.
+    macOS: "27.0"
+  createIntermediateGroups: true
+packages:
+  iSyncCore:
+    path: iSyncCore
+targets:
+  iSync:
+    type: application
+    platform: macOS
+    sources:
+      - iSyncApp
+    dependencies:
+      - package: iSyncCore
+        product: iSyncCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.leohchen.iSync
+        PRODUCT_NAME: iSync
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "2"
+        ARCHS: arm64
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 Leo Chen. MIT License."
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Personal use: signed to run on this Mac only, with no App Sandbox.
+        # Hardened runtime stays off so the unsigned Homebrew libraries can load.
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_APP_SANDBOX: NO
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
