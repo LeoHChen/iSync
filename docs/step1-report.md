@@ -11,8 +11,8 @@ Connecting, app file transfers and copying photos to the Mac all work on iOS 27.
 | T1 Connect | Pass | Worked after a new Trust tap. The phone first rejected the Mac's old pair record with `InvalidHostID`. |
 | T2 Files | Pass | A 1 MB file went into an app's Documents folder and back with a matching SHA-256, then was deleted. |
 | T3 Photos to Mac | Pass | Every AFC copy had the right size, with no errors. ImageCaptureCore also works, with the limits listed below. `Photos.sqlite` is readable. |
-| T4 Add a photo (ATC) | Not run | The preflight verdict is `unknown`, and the owner's own confirmation hasn't arrived. |
-| T5 Add a song (ATC) | Not run | Same as T4. |
+| T4 Add a photo (ATC) | Handshake passed. No photo added. | Reached `ReadyForSync`, then stopped as approved. |
+| T5 Add a song (ATC) | Not completed. No song added. | The first attempt was refused because of a bug in the request. The corrected run wasn't made, for the reason under T4 and T5 below. |
 
 ## Devices
 
@@ -85,51 +85,52 @@ At these speeds, the whole 191 GB library would take about 74 minutes with AFC a
 
 ## T4 and T5: how far ATC got
 
-No ATC session was opened. The test stopped at the safety gate.
+The phone's owner approved a handshake-only test: Apple's `AirTrafficHost` framework runs the session, the test stops at the phone's first reply to the sync request, and no album, song or sync metadata is sent. No Grappa data was replayed, no signing code of our own was used, and no special entitlements were needed.
 
-| Stage | T4 photo | T5 song |
+| Stage | T4 photos, corrected | T4 and T5, first attempt |
 |---|---|---|
-| Load `AirTrafficHost` and `MobileDevice` with `dlopen` | Yes | Yes |
-| Resolve the required symbols | Yes | Yes |
-| Pairing accepted by Apple's framework | Yes | Yes |
-| Preflight | `unknown`, so stopped | `unknown`, so stopped |
-| AFC upload to `/iTunes_Control/Music` | Not applicable | Not attempted |
-| `SyncAllowed`, Grappa, `ReadyForSync`, manifest | Not attempted | Not attempted |
+| Load `AirTrafficHost` and `MobileDevice` | Yes | Yes |
+| Open the session | Yes | Yes |
+| `SyncAllowed` | Yes | Yes |
+| Framework generates an 84-byte Grappa blob | Yes | Yes |
+| Reply to the sync request | `ReadyForSync`, with an 83-byte Grappa reply | `SyncFailed`, ErrorCode 12 |
+| Send sync metadata or files | Not attempted | Not attempted |
 
-### Why the preflight says `unknown`
+**ErrorCode 12 wasn't about Grappa.** The phone's log said why: `Sending sync disallowed, incompatible version: (null) vs. 10.5.0.115 required`. The first requests carried no host version, because the test passed an empty dictionary as the last argument of `ATHostConnectionSendSyncRequest`. That argument is merged into the request's `HostInfo`. Passing `LibraryID`, `SyncHostName`, `SyncedDataclasses` and `Version` fixed it. The version sent is the real version of `AirTrafficHost.framework`.
 
-Nothing on the phone is Finder-synced today, but the effect of a new host library can't be ruled out.
+### What the handshake changed on the phone
 
-| Check | Finding |
-|---|---|
-| Media items with a sync ID | 0 of 1,070 |
-| Photo assets in a sync folder | 0 of 15,374. `/PhotoData/Sync` doesn't exist. |
-| Playlists with a sync ID | 9, all with no items, created in 2018 and 2019 |
-| Photo-sync settings | `PhotosFolderName`, `PhotosFolderAlbums` and `PhotosFolderPrefs`, last changed in December 2018 |
-| Music stored on the phone | 1,023 tracks, 8.07 GB, with no test yet of how a new host library treats them |
+All content was unchanged before and after: media items, tracks, playlists, photo assets, albums and every file in `/DCIM` and `/iTunes_Control/Music`. iOS did do three things:
 
-### What to expect
+- It created empty folders: `/PhotoData/Sync`, `/Airlock/Keybag` and `/Airlock/Photo`.
+- It ran `prepareForSyncWithHostAnchor: 0` and queued a `cleanup sync state` job. This phone has no synced photos, so nothing was removed, but it suggests a session from a new library could clear previously synced photos on a phone that has them.
+- When the session closed, it cancelled and finished the session normally.
 
-[mediaporter's research](https://github.com/faeton/mediaporter/blob/main/research/docs/AIRTRAFFICHOST_FINDINGS.md) found that Apple's framework can't complete Grappa from a third-party process, because `fairplayd` requires the Apple-only entitlement `com.apple.private.fpsd.client`. That work was done on iOS 26.3.1 and hasn't been confirmed on iOS 27.2.
+### Why the corrected T5 wasn't run
 
-mediaporter gets past this by [replaying a captured Grappa blob and using separately written CIG signing code](https://github.com/faeton/mediaporter/blob/main/research/docs/ATC_SYNC_FLOW.md). iSync's plan is for Apple's code to run the handshake, so `iSyncProbe` does neither of those things. It also uses no private entitlements. Its code is original, and mediaporter was only read for the protocol.
+T5 was to run only if T4 changed nothing, and T4 did change something. The same preparation step for music hasn't been observed, and every music track on this phone is flagged `sync_in_my_library`. So running it is the phone owner's decision.
+
+### What's still unknown
+
+- **Signing.** Published research says sync metadata needs a CIG signature made from the phone's Grappa reply. Whether Apple's framework can make that signature for a third-party process hasn't been tested.
+- **Photo metadata.** The published format covers video. The format for adding photos isn't documented.
+- **Metadata has never been sent,** so nothing beyond `ReadyForSync` has been tested.
 
 ## Recommendation
-
-These are provisional for adding to the iPhone, because T4 and T5 haven't run.
 
 | Feature | Recommendation | Basis |
 |---|---|---|
 | Photos to Mac | AFC, 2 connections, 1 MB reads | Measured. It's faster than ImageCaptureCore, works on a locked phone, and sees every file in `/DCIM`. |
 | Files | AFC through house_arrest | Measured in T2. |
-| Add photos to iPhone | The helper app with PhotoKit, unless the handshake succeeds | Published research suggests Apple's framework will refuse. PhotoKit is a public API, and it puts photos in the main library, where they can be edited and deleted. |
-| Add music to iPhone | Not shown to be viable | The only published route needs the replayed blob and separate signing code. Apple offers no public alternative. |
+| Add photos to iPhone | Find out next whether Apple's framework can sign sync metadata. Keep the PhotoKit helper app as the fallback. | The main reason to expect failure is gone, but the steps after the handshake are untested. |
+| Add music to iPhone | Same open question as photos, plus the effect of anchor 0 on existing tracks | Apple offers no public alternative. |
 
 ## Next steps
 
-1. **Confirm the handshake.** With the owner's OK, run `t4` and `t5` with `--user-approved-sync-risk`. They stop at the phone's first reply and send no album, song or sync metadata.
-2. **Try a USB 3 cable.** Rerun `t3` to measure the real gain. Four connections may start to help at that speed.
-3. **Test the iPhone 18 Pro Max.** It hasn't been connected yet.
+1. **Decide on T5.** The corrected handshake for music needs the owner's decision.
+2. **Test signing.** Check, without a phone, whether Apple's framework exposes CIG signing.
+3. **Try a USB 3 cable.** Rerun `t3` to measure the real gain. Four connections may start to help at that speed.
+4. **Test the iPhone 18 Pro Max.** It hasn't been connected yet.
 
 ## Open questions
 

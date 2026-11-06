@@ -67,6 +67,47 @@ final class AirTrafficHost {
     }
 }
 
+extension AirTrafficHost {
+    /// CFBundleVersion of AirTrafficHost.framework on this Mac.
+    var frameworkVersion: String {
+        let path = "/System/Library/PrivateFrameworks/AirTrafficHost.framework/Resources/Info.plist"
+        guard let data = FileManager.default.contents(atPath: path),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let version = plist["CFBundleVersion"] as? String
+        else { return "" }
+        return version
+    }
+}
+
+private let seenDevices = Locked<Set<String>>([])
+private var copyDeviceIdentifier: (@convention(c) (UnsafeMutableRawPointer) -> Unmanaged<CFString>)?
+
+extension AirTrafficHost {
+    /// Lets MobileDevice discover the phone, which AirTrafficHost needs before it can connect.
+    func waitForDevice(udid: String, timeout: TimeInterval) -> Bool {
+        typealias Callback = @convention(c) (UnsafeMutablePointer<UnsafeMutableRawPointer?>, UnsafeMutableRawPointer?) -> Void
+        typealias Subscribe = @convention(c) (Callback, UInt32, UInt32, UnsafeMutableRawPointer?, UnsafeMutablePointer<UnsafeMutableRawPointer?>) -> Int32
+        guard let s = dlsym(mobileDevice, "AMDeviceNotificationSubscribe"),
+              let c = dlsym(mobileDevice, "AMDeviceCopyDeviceIdentifier")
+        else { return false }
+        copyDeviceIdentifier = unsafeBitCast(c, to: (@convention(c) (UnsafeMutableRawPointer) -> Unmanaged<CFString>).self)
+        let subscribe = unsafeBitCast(s, to: Subscribe.self)
+        var note: UnsafeMutableRawPointer?
+        let rc = subscribe({ info, _ in
+            guard let device = info[0], let identify = copyDeviceIdentifier else { return }
+            let id = identify(device).takeRetainedValue() as String
+            seenDevices.with { _ = $0.insert(id) }
+        }, 0, 0, nil, &note)
+        guard rc == 0 else { return false }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            CFRunLoopRunInMode(.defaultMode, 0.1, false)
+            if seenDevices.with({ $0.contains(udid) }) { return true }
+        }
+        return false
+    }
+}
+
 /// Keeps the same library ID across runs, so the phone only ever sees one host library.
 func iSyncLibraryID() -> String {
     let url = Paths.out.appendingPathComponent("library-id.txt")
@@ -194,9 +235,29 @@ final class ATCSession {
 
     var timeline: [[String: Any]] { events.with { $0.map(\.json) } }
 
+    /// Reads the parameters that explain the phone's answer. Grappa data is only ever
+    /// described by its length, and is never saved.
     private func describe(_ msg: AirTrafficHost.Msg) -> String {
-        let cf = unsafeBitCast(msg, to: CFTypeRef.self)
-        return CFCopyDescription(cf) as String
+        var parts: [String] = []
+        for key in ["ErrorCode", "RequiredVersion", "Reason", "Allowed", "Dataclasses", "DataclassAnchors", "DeviceInfo", "SyncTypes"] {
+            guard let v = ath.messageParam(msg, key as CFString)?.takeUnretainedValue() else { continue }
+            parts.append("\(key)=\(summary(v))")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private func summary(_ value: CFTypeRef) -> String {
+        if CFGetTypeID(value) == CFDataGetTypeID() {
+            return "<\(CFDataGetLength((value as! CFData))) bytes>"
+        }
+        if CFGetTypeID(value) == CFDictionaryGetTypeID(), let d = value as? [String: Any] {
+            let inner = d.map { k, v -> String in
+                if let data = v as? Data { return "\(k)=<\(data.count) bytes>" }
+                return "\(k)=\(String(describing: v).prefix(80))"
+            }
+            return "{" + inner.sorted().joined(separator: ", ") + "}"
+        }
+        return String((CFCopyDescription(value) as String).prefix(160))
     }
 
     private func startReader() {
@@ -219,14 +280,7 @@ final class ATCSession {
                 let desc = describe(m)
                 seen.with { $0.append(name) }
                 messages.with { $0[name] = desc }
-                var note = ""
-                if let code = ath.messageParam(m, "ErrorCode" as CFString)?.takeUnretainedValue() {
-                    note = " ErrorCode=\(code)"
-                }
-                if let rv = ath.messageParam(m, "RequiredVersion" as CFString)?.takeUnretainedValue() {
-                    note += " RequiredVersion=\(rv)"
-                }
-                event("recv", name + note)
+                event("recv", desc.isEmpty ? name : "\(name) \(desc)")
             }
         }
         thread.stackSize = 1 << 20
@@ -266,11 +320,15 @@ final class ATCSession {
         stages["connectionCreated"] = true
         CFRunLoopRunInMode(.defaultMode, 0.5, false)
 
+        // The phone rejects a request with no host version. This is the real version of Apple's
+        // framework, which is what's actually acting as the host here.
+        let version = ath.frameworkVersion
+        stages["hostVersionSent"] = version
         let hostInfo: [String: Any] = [
             "LibraryID": libraryID,
             "SyncHostName": host,
             "SyncedDataclasses": [String](),
-            "Version": "12.8",
+            "Version": version,
         ]
         event("send", "SendPowerAssertion rc=\(ath.sendPowerAssertion(c, kCFBooleanTrue))")
         event("send", "SendHostInfo rc=\(ath.sendHostInfo(c, hostInfo as CFDictionary))")
@@ -286,8 +344,9 @@ final class ATCSession {
         stages["grappaSessionBeforeRequest"] = Int(g0)
         event("info", "Grappa session id before sync request: \(g0)")
 
+        // The last argument is merged into the request's HostInfo, beside Apple's Grappa data.
         let rc = ath.sendSyncRequest(
-            c, dataclasses as CFArray, anchors as CFDictionary, [String: Any]() as CFDictionary)
+            c, dataclasses as CFArray, anchors as CFDictionary, hostInfo as CFDictionary)
         stages["sendSyncRequestReturn"] = rc
         event("send", "SendSyncRequest dataclasses=\(dataclasses) rc=\(rc)")
 
@@ -318,10 +377,12 @@ final class ATCSession {
         event("send", "SendPowerAssertion(false) rc=\(ath.sendPowerAssertion(c, kCFBooleanFalse))")
         event("send", "Invalidate rc=\(ath.invalidate(c))")
         // ReadMessage can stay blocked after the connection closes, so only wait briefly.
+        // Releasing the connection under a blocked read would crash and lose these results.
         if readerDone.wait(timeout: .now() + 3) == .timedOut {
-            event("info", "reader thread still blocked after close")
+            event("info", "reader thread still blocked after close, so the connection was left to process exit")
+        } else {
+            ath.release(c)
         }
-        ath.release(c)
         conn = nil
     }
 }

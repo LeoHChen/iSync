@@ -49,12 +49,10 @@ Run with no arguments to see every command and option.
 
 - Both commands rerun `preflight` and refuse to open a sync session unless the
   verdict is `clean`.
-- `--user-approved-sync-risk` overrides that. Use it only after the phone's owner
-  has agreed.
+- `--user-approved-sync-risk` overrides an `unknown` verdict. Use it only after the
+  phone's owner has agreed. It never overrides a `synced` verdict.
 - The session stops at the phone's first reply to the sync request. This version
-  sends no album, song or sync metadata.
-- `t5` also tests AFC write access by uploading a generated test track to the music
-  folder, reading it back and deleting it.
+  sends no album, photo, song, file or sync metadata.
 - Apple's framework runs the Grappa handshake. This tool doesn't replay captured
   Grappa blobs, include its own signing code, or use private entitlements.
 
@@ -68,7 +66,6 @@ Results, logs and copied files go to `~/iSyncProbe-out`, outside the repo:
 | `afc/`, `icc/` | Photos copied by the latest speed runs |
 | `preflight/` | Copies of the phone's `Photos.sqlite` and `MediaLibrary.sqlitedb` |
 | `logs/` | Mac and iPhone logs from `t4` and `t5` |
-| `media/` | The generated test photo and song |
 
 These folders hold personal photos and library data. Delete them when you're done:
 

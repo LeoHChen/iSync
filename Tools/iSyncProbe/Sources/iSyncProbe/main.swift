@@ -12,8 +12,8 @@ let usage = """
       t2                    round-trip a test file through an app's Documents
       t3                    copy photos to the Mac, AFC vs ImageCaptureCore
       preflight             check for Finder- or iTunes-synced content
-      t4                    add one photo over ATC (runs preflight first)
-      t5                    add one song over ATC (runs preflight first)
+      t4                    ATC handshake for photos, adding nothing (runs preflight first)
+      t5                    ATC handshake for music, adding nothing (runs preflight first)
       atc-check             load Apple's frameworks and check symbols. Opens no session.
       all                   t1, t2, t3, preflight, and t4 and t5 if preflight is clean
 
@@ -32,8 +32,8 @@ let usage = """
       --wait <seconds>      how long to wait for the Trust prompt (default 120)
       --atc-timeout <s>     how long to wait for each ATC stage (default 60)
       --user-approved-sync-risk
-                            run t4/t5 even if preflight isn't clean. Only use
-                            this after the phone's owner has agreed.
+                            run t4/t5 if preflight is unknown. Only use this after
+                            the phone's owner has agreed. Never overrides synced.
 
     Output goes to ~/iSyncProbe-out, outside the repo.
     """
