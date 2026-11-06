@@ -179,11 +179,11 @@ private struct DeviceDetail: View {
     }
 }
 
-/// Stands in for a feature that depends on the T4 and T5 sync tests.
+/// Stands in for adding to the iPhone, which is on the roadmap.
 private struct AddToIPhoneView: View {
     var body: some View {
         ContentUnavailableView(
             "Not available yet", systemImage: "plus.rectangle.on.rectangle",
-            description: Text("Adding photos and music to your iPhone isn't in this version. It depends on a sync test that hasn't run yet."))
+            description: Text("Adding photos and music to your iPhone isn't in this version yet. See the roadmap in the README."))
     }
 }

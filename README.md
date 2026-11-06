@@ -1,40 +1,103 @@
 # iSync
 
-iSync is a personal macOS app for moving photos, music and files between a Mac
-and an iPhone over USB, with Wi-Fi to follow. It is built for one owner and is
-installed directly rather than through the Mac App Store.
+iSync is a free macOS app for copying photos, music and files from your iPhone to your Mac over USB. It works like `rsync`: it shows you what would happen, then copies only what's missing, and it finds duplicates by their content rather than their name.
 
-## Scope
+iSync is an independent project, and it isn't affiliated with or endorsed by Apple Inc.
 
-- **Photos:** copy originals from the iPhone to a Mac folder, quickly and
-  without format conversion. Add photos from the Mac to iSync albums on the
-  iPhone.
-- **Music:** copy songs from the iPhone with their tags. Add your own non-DRM
-  audio files to the Music app.
-- **Files:** browse and transfer the Documents folders of apps that allow file
-  sharing.
-- **Later:** full encrypted backup and restore, then Wi-Fi for every feature.
+## Features in 0.2
 
-iSync moves data between a Mac and an iPhone. It does not transfer directly
-from one iPhone to another.
+- **Fast photo copies.** Originals come straight from the iPhone with no conversion. Copies reached about 43 MB/s on a USB 2 link in testing, about 39% faster than Apple's ImageCaptureCore.
+- **A preview before every copy.** See what's new, what's already copied, what's a duplicate, and what conflicts, with counts and sizes.
+- **Duplicates found by content.** The same photo has different `IMG_` names on different phones, so iSync compares capture time, dimensions and size, then confirms with SHA-256.
+- **Skip or overwrite.** You choose what happens when a file already exists. Nothing else in the folder is ever deleted.
+- **Archive check.** Point iSync at an old photo folder, and it won't copy what's already there. It only reads that folder.
+- **Live Photos stay together,** and repeat runs skip finished files. You can pause, resume or cancel, and pick up where you left off.
+- **Music to your Mac.** Tracks are copied as `Artist/Album/NN Title.ext`, with their tags and artwork intact.
+- **App files.** Browse and transfer the Documents folders of apps that allow file sharing, with drag and drop.
+- **Compare two iPhones.** See how many photos a second iPhone already has, without changing either phone.
 
-## Status
+iSync can't add photos or music to an iPhone yet. See the [roadmap](#roadmap).
 
-**Version 0.2.** The app detects iPhones as they're plugged in. It copies photos and
-music to Mac folders like `rsync`: it shows a dry run first, then copies only what's
-missing, with a choice of skipping duplicates or overwriting. It also moves files in
-and out of apps that allow file sharing, and can compare what two iPhones hold.
+## Requirements
 
-Adding photos and music to an iPhone isn't in this version. It depends on a sync test
-that hasn't run yet. See [the step 1 report](docs/step1-report.md).
+- A Mac with Apple Silicon, running macOS 27 or later
+- An iPhone connected with a USB cable
 
-## Platforms
+iSync has been tested on macOS 27.2 with an iPhone 16 Pro Max on iOS 27.2. Other iPhones and iOS versions may work, but they haven't been tested.
 
-macOS 27.2 on Apple Silicon. iPhone 16 Pro Max on iOS 27.2 has been tested.
+## Install
 
-## Build and run
+1. Download `iSync-0.2.0.dmg` from [Releases](https://github.com/LeoHChen/iSync/releases).
+2. Open the DMG and drag **iSync** to **Applications**.
+3. Open iSync. macOS will refuse the first time, as explained below.
 
-You need Xcode and Homebrew.
+### The first time you open iSync
+
+iSync isn't notarized by Apple, because that requires a paid Developer ID, so macOS blocks it the first time.
+
+1. Open iSync, and click **Done** when macOS says it can't verify the app.
+2. Go to **System Settings > Privacy & Security**.
+3. Scroll down to **Security**, and click **Open Anyway** next to the iSync message.
+4. Click **Open Anyway** again and enter your password.
+
+You only need to do this once. On some older versions of macOS, you can instead right-click the app and choose **Open**.
+
+Only do this if you trust the source. You can check your download against the checksum on the release page, or [build iSync yourself](#build-from-source).
+
+## Usage
+
+Plug in your iPhone and unlock it. If it asks, tap **Trust** and enter your passcode. Your iPhone then appears in the sidebar with its model, storage and battery.
+
+### Photos
+
+1. Choose a destination folder and how to organize it: the same folders as the iPhone, or by year and month.
+2. Choose what happens if a file already exists.
+3. Read the preview, and click **Copy**.
+
+| Group | What it means | Skip duplicates | Overwrite |
+|---|---|---|---|
+| New | Not at the destination | Copied | Copied |
+| Already copied | Done by an earlier run, or already at its path | Skipped | Copied again, replacing the file |
+| Exact duplicate | Same bytes under another name, or twice on the phone | Skipped | Skipped |
+| Same name, different content | A different file has this name | Kept, with a number added to its name | Replaces the file |
+| Possible duplicate | Same capture time and dimensions, different bytes | Copied and listed | Copied and listed |
+
+You can turn off **Copy possible duplicates** to hold those files back. They stay listed either way.
+
+### Music
+
+Choose **Music** in the sidebar, then click **Copy**. Protected tracks are listed but not copied, because they wouldn't play once copied.
+
+### Files
+
+Choose **Files**, then pick an app. Drag files in from Finder, or use **Add Files…** and **Save to Mac…**. Deleting a file from your iPhone always asks you to confirm first.
+
+## How it works
+
+iSync talks to your iPhone the same way Finder does, using open-source [libimobiledevice](https://libimobiledevice.org) libraries.
+
+- **usbmuxd and lockdown** detect the iPhone, handle the Trust pairing, and start services on the phone.
+- **AFC** reads the shared media area, which holds `/DCIM` and `/iTunes_Control/Music`.
+- **house_arrest** opens the Documents folder of an app that allows file sharing.
+- **`Photos.sqlite` and `MediaLibrary.sqlitedb`** are copied to your Mac and read there, for capture details and track names. They're never changed on the phone.
+
+### Finding duplicates
+
+1. **Candidates come from details, not bytes.** Size, capture time and dimensions nominate possible matches, using the phone's database and each Mac file's EXIF or QuickTime data. A detail that's missing doesn't rule out a match.
+2. **SHA-256 decides.** A file is only skipped once its hash confirms the match. An unconfirmed match has no effect on where other files go. Hashes are cached, so each file is read for hashing once.
+3. **Only photos and videos are matched.** Edit sidecars such as `.AAE` are often byte-identical across different photos, so they simply follow their photo.
+
+A manifest in `.isync` inside the destination folder records each file's path, size, date and hash. Each iPhone has its own manifest. Files are written under a temporary name and get their real name only after their size checks out.
+
+## Privacy
+
+Everything stays on your Mac. iSync has no accounts, no analytics and no network code.
+
+iSync keeps copies of your iPhone's photo and music databases in `~/Library/Caches/iSync`. You can delete that folder at any time, and iSync will recreate it when needed.
+
+## Build from source
+
+You need Xcode, [Homebrew](https://brew.sh) and the libraries below.
 
 ```bash
 brew install libimobiledevice libplist libusbmuxd pkgconf xcodegen
@@ -52,113 +115,69 @@ xcodebuild -project iSync.xcodeproj -scheme iSync -configuration Release -derive
 open build/Build/Products/Release/iSync.app
 ```
 
-You don't need to move the app to `/Applications`, but it also works from there.
+This build links Homebrew's libraries, so it needs them installed. To build the self-contained app and the DMG, install [dmgbuild](https://dmgbuild.readthedocs.io) and run:
 
-`iSync.xcodeproj` is generated from `project.yml`, so it isn't in the repo. Run
-`xcodegen generate` again after adding files or changing `project.yml`.
+```bash
+scripts/make-release.sh
+```
 
-## Tests
+### Tests
 
 ```bash
 cd iSyncCore && swift test
 ```
 
-`isync-check` runs the real engine on a connected iPhone. The `files` command puts
-uniquely named test files in the chosen app's Documents folder, then deletes them.
+`isync-check` runs the real engine against a connected iPhone. Its `files` command puts uniquely named test files in an app's Documents folder, then deletes them.
 
 ```bash
 cd iSyncCore && swift run isync-check info
 ```
 
-```bash
-cd iSyncCore && swift run isync-check photos --dest /tmp/isync-test --limit 50
-```
-
-```bash
-cd iSyncCore && swift run isync-check files
-```
-
-## How photo copying works
-
-**Originals only.** Files come straight from the iPhone's `/DCIM` folder with no
-conversion. Edits made in the Photos app aren't applied, because iOS stores them
-elsewhere. `.AAE` edit files are copied, but they aren't the edited photos.
-
-**A dry run comes first.** Every file falls into exactly one group:
-
-| Group | What it means | Skip duplicates | Overwrite |
-|---|---|---|---|
-| New | Not at the destination | Copied | Copied |
-| Already copied | Done by an earlier run, or already at its path | Skipped | Copied again, replacing the file |
-| Exact duplicate | Same bytes under another name, or twice on the phone | Skipped | Skipped |
-| Same name, different content | A different file has this name | Kept, with a number added | Replaces the file |
-| Possible duplicate | Same capture time and dimensions, different bytes | Copied and listed | Copied and listed |
-
-Nothing is ever deleted except a file that Overwrite replaces at the same path.
-
-**Duplicates are found by content, not by name,** because one photo has different
-`IMG_` names on different phones.
-
-1. Size, capture time and dimensions nominate candidates. These come from the phone's
-   `Photos.sqlite` and from each Mac file's EXIF or QuickTime data, so most files don't
-   need reading. If a detail is missing, it doesn't rule out a match.
-2. SHA-256 decides. A file is only skipped once its hash is confirmed, and an unconfirmed
-   match has no effect on where other files go. Hashes are cached, so each file is read
-   for hashing once.
-3. Only photos and videos are matched. Sidecars such as `.AAE` are often byte-identical
-   across different photos, so they simply follow their photo.
-
-**Other details:**
-
-- **Archive folders.** You can list other Mac folders to check for duplicates. iSync only
-  reads them, and keeps its index of them in `~/Library/Caches/iSync`.
-- **Repeat runs skip finished files.** A manifest in `.isync` inside the destination folder
-  records each file's path, size, date and hash. Each iPhone has its own manifest.
-- **Files removed from the Mac folder are copied again** on the next run.
-- **Live Photos stay together.** Files with the same name in the same iPhone folder are
-  copied on one connection and placed side by side, even in the year and month layout.
-- **Sizes are checked.** A file gets its real name only after its size matches.
-
-## Comparing two iPhones
-
-With two iPhones plugged in, the Photos page shows how many photos the other phone already
-has. It reads each phone's `Photos.sqlite` and file list, compares capture time, dimensions
-and size, and changes nothing on either phone. Hashing isn't needed for this overview, so it
-doesn't have to read the whole library over USB. SHA-256 would confirm matches before any
-transfer.
-
-## Music
-
-The Music page reads the phone's `MediaLibrary.sqlitedb` and copies tracks from
-`/iTunes_Control/Music` to a Mac folder as `Artist/Album/NN Title.ext`. Files are copied
-byte for byte, so their tags and artwork are preserved. Tracks marked as protected, or
-stored as Apple Music content, are listed but not copied. Tracks with no artist or album in
-the library go in `Unknown Artist` and `Unknown Album`.
-
-## Project layout
+### Project layout
 
 | Path | Contents |
 |---|---|
-| `iSyncCore` | Swift package: device layer, photo copy engine, tests and `isync-check` |
+| `iSyncCore` | Swift package: device layer, copy engine, tests and `isync-check` |
 | `iSyncApp` | SwiftUI app |
-| `project.yml` | XcodeGen project definition |
-| `Tools/iSyncProbe` | The step 1 feasibility tool |
-| `docs` | Reports |
+| `Tools/iSyncProbe` | Research tool for protocol tests, which isn't part of the app |
+| `docs` | Research reports |
+| `scripts` | Release packaging |
 
-## Signing and libraries
+## Known limitations
 
-The app is ad-hoc signed to run on this Mac, with no App Sandbox and no hardened
-runtime. It links Homebrew's libimobiledevice and libplist from `/opt/homebrew`, so
-it needs those packages installed. A `brew upgrade` that changes their versions can
-stop the app from launching until you rebuild it.
+- **Copying to an iPhone isn't available yet.** The destination is always a Mac folder.
+- **Edits aren't included.** You get the originals. `.AAE` edit files are copied, but they aren't the edited photos.
+- **USB only.** Wi-Fi is on the roadmap.
+- **Your cable can limit speed.** A USB 2 cable caps copies at about 43 MB/s. iSync tells you when the link is running at USB 2.
+- **The iPhone comparison is an estimate.** It uses photo details, not bytes, so treat it as a preview.
+- **Tracks with no artist or album** in your library go in `Unknown Artist` and `Unknown Album`.
+- **Files you delete from the Mac folder are copied again** on the next run.
+- **Not notarized,** so the first launch takes the extra steps above.
+- **Limited testing.** 0.2 has been tested on one iPhone model and one version of iOS.
 
-To bundle the libraries later:
+## History
 
-1. Copy `libimobiledevice`, `libimobiledevice-glue`, `libplist`, `libusbmuxd` and
-   OpenSSL's `libssl` and `libcrypto` into `Contents/Frameworks`.
-2. Rewrite their install names and references to `@rpath` with `install_name_tool`.
-3. Re-sign each library and then the app, because rewriting breaks their signatures.
-4. Check that nothing still points at Homebrew with `otool -L`.
+| Date | Milestone |
+|---|---|
+| 2026-11-05 | Research and plan |
+| 2026-11-05 | Feasibility tests on iOS 27.2 ([report](docs/step1-report.md)) |
+| 2026-11-05 | **0.1:** device detection, fast photo copies, app files |
+| 2026-11-06 | **0.2:** rsync-style preview, skip or overwrite, content-based duplicates, archive folder check, music to Mac, app icon |
 
-Those libraries are LGPL or Apache licensed, so check their terms before sharing a
-bundled build with anyone else.
+## Roadmap
+
+These plans may change.
+
+| Version | Plan |
+|---|---|
+| 0.3 | Add photos to an iPhone, and iPhone-to-iPhone transfers through the Mac |
+| 0.4 | Add music to an iPhone, depending on further research |
+| 0.5 | Full backup and restore |
+| 0.6 | Wi-Fi connections |
+| Later | Developer ID signing and notarization, Intel support, exporting edited photos, wider iPhone model support |
+
+## License
+
+iSync is under the [MIT License](LICENSE). The release package includes libimobiledevice, libimobiledevice-glue, libplist and libusbmuxd under the LGPL 2.1, and OpenSSL under the Apache License 2.0. See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for details and source links.
+
+iPhone, Mac, macOS, Finder and iOS are trademarks of Apple Inc.

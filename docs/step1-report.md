@@ -32,10 +32,7 @@ The port on the iPhone 16 Pro Max is [limited to 10 Gb/s](https://9to5mac.com/20
 
 | Measure | Value |
 |---|---|
-| Files in `/DCIM` | 34,694 |
-| Total size | 191.03 GB |
-| Folders | 66 |
-| Time to list everything | About 4 s, using 4 connections |
+| Time to list every file in `/DCIM` | About 4 s for tens of thousands of files, using 4 connections |
 | iCloud Photos | Off, so the originals are on the phone. This is why Settings has no "Optimize iPhone Storage" option. |
 
 ### Speed
@@ -58,7 +55,7 @@ The same 73 files, copied repeatedly, show the same pattern without the sample d
 | 2 | 43.2 |
 | 4 | 43.5 |
 
-At these speeds, the whole 191 GB library would take about 74 minutes with AFC and about 103 minutes with ImageCaptureCore.
+At these speeds, 100 GB takes about 39 minutes with AFC and about 54 minutes with ImageCaptureCore.
 
 ### What the numbers show
 
@@ -70,13 +67,13 @@ At these speeds, the whole 191 GB library would take about 74 minutes with AFC a
 
 ### ImageCaptureCore's limits
 
-- Its catalog reports 100% complete at 5,251 items, while `Photos.sqlite` has 15,374 assets. I haven't found out why.
+- Its catalog reports 100% complete with only about a third of the assets in `Photos.sqlite`. I haven't found out why.
 - It didn't list 10 of 419 sample files in one run and 14 of 423 in another. In the second run, those were 10 JPG, 2 HEIC, 1 JPEG and 1 PNG.
 - It failed to detect the phone once in 4 runs, then worked on retry.
 
 ### Photos.sqlite
 
-`/PhotoData/Photos.sqlite` is readable over AFC. It's 934 MB, copied in 24 s, with 100 tables, 15,374 assets and 362 album rows. So albums and edit information should be available to the app later. Schema names can change between iOS versions.
+`/PhotoData/Photos.sqlite` is readable over AFC. So albums and edit information should be available to the app later. Schema names can change between iOS versions.
 
 ### Not measured
 

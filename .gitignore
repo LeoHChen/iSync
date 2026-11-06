@@ -4,6 +4,9 @@
 # Swift Package Manager
 .build/
 build-next/
+build-release/
+dist/
+.venv/
 .swiftpm/
 Package.resolved
 
@@ -39,3 +42,6 @@ iSyncProbe-out/
 *.xcodeproj/
 build/
 build-next/
+build-release/
+dist/
+.venv/
